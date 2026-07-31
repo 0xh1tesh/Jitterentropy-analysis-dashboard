@@ -131,16 +131,17 @@ entr_proj/
 ---
 
 ## Screenshots
-
-
-
 ### Oscilloscope View
+<img width="1907" height="1050" alt="ossci" src="https://github.com/user-attachments/assets/74af1240-8b9d-4917-aabd-dbade41eef44" />
 
 
 ### Performance Dashboard
+<img width="1911" height="1047" alt="Screenshot 2026-07-31 151125" src="https://github.com/user-attachments/assets/d938d937-493f-400b-9acd-6a43e0426428" />
 
 
 ### Timeline Analysis
+<img width="1917" height="1105" alt="Screenshot 2026-07-31 151143" src="https://github.com/user-attachments/assets/5174d20e-67c1-48a2-b25e-f0eab20ce91f" />
+
 
 
 ---
