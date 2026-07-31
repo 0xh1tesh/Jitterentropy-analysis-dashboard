@@ -1,0 +1,38 @@
+# Application build and release outputs
+/build/
+/runtime/
+/release/
+/jitterentropy-library/build/
+
+# Root-level legacy runtime artifacts
+/main_gui.exe
+/WebView2Loader.dll
+/main_gui.exe.WebView2/
+/current_panel.txt
+/scope_code.txt
+/test.c
+
+# Build products and logs
+*.exe
+*.dll
+*.obj
+*.a
+*.lib
+*.pdb
+*.ilk
+*.log
+*.tmp
+*.cache
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+random.bin
+benchmark*.csv
+
+# IDE and WebView2 state
+.vs/
+.vscode/
+*.code-workspace
+*.WebView2/
+EBWebView/

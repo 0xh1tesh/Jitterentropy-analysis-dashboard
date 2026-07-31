@@ -1,0 +1,197 @@
+#include "benchmark.h"
+#include "health_monitor.h"
+#include "rng_wrapper.h"
+
+#include <errno.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define DEFAULT_RANDOM_BYTE_COUNT 32U
+#define DEFAULT_BENCHMARK_BYTES 1024U
+#define DEFAULT_BENCHMARK_ITERATIONS 1000
+#define RANDOM_OUTPUT_FILE "random.bin"
+
+static void print_usage(const char *program_name)
+{
+	fprintf(stderr,
+		"Usage: %s [options]\n"
+		"Options:\n"
+		"  --bytes N             Generate N random bytes (default: 32)\n"
+		"  --write               Write raw bytes to random.bin\n"
+		"  --prompt-write        Ask whether to write raw bytes to random.bin\n"
+		"  --benchmark [N I]     Benchmark N bytes per call for I iterations\n"
+		"  --status              Print health status before exit\n"
+		"  --help                Show this help\n",
+		program_name);
+}
+
+static int parse_size(const char *text, size_t *value)
+{
+	unsigned long long parsed;
+	char *endptr;
+
+	if (!text || !value)
+		return -1;
+
+	errno = 0;
+	parsed = strtoull(text, &endptr, 10);
+	if (errno || endptr == text || *endptr != '\0')
+		return -1;
+	if (parsed > (unsigned long long)SIZE_MAX)
+		return -1;
+
+	*value = (size_t)parsed;
+	return 0;
+}
+
+static int parse_int(const char *text, int *value)
+{
+	long parsed;
+	char *endptr;
+
+	if (!text || !value)
+		return -1;
+
+	errno = 0;
+	parsed = strtol(text, &endptr, 10);
+	if (errno || endptr == text || *endptr != '\0' || parsed <= 0 ||
+	    parsed > 2147483647L)
+		return -1;
+
+	*value = (int)parsed;
+	return 0;
+}
+
+static bool should_prompt_write(void)
+{
+	char answer[8];
+
+	printf("Write raw bytes to %s? [y/N]: ", RANDOM_OUTPUT_FILE);
+	if (!fgets(answer, sizeof(answer), stdin))
+		return false;
+
+	return answer[0] == 'y' || answer[0] == 'Y';
+}
+
+static int write_random_file(const unsigned char *buffer, size_t len)
+{
+	FILE *file;
+
+	file = fopen(RANDOM_OUTPUT_FILE, "wb");
+	if (!file)
+		return -1;
+
+	if (fwrite(buffer, 1, len, file) != len) {
+		fclose(file);
+		return -1;
+	}
+
+	if (fclose(file))
+		return -1;
+
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	unsigned char *random_bytes = NULL;
+	size_t random_byte_count = DEFAULT_RANDOM_BYTE_COUNT;
+	size_t benchmark_bytes = DEFAULT_BENCHMARK_BYTES;
+	int benchmark_iterations = DEFAULT_BENCHMARK_ITERATIONS;
+	bool write_output = false;
+	bool prompt_write = false;
+	bool run_benchmark_mode = false;
+	bool print_status = false;
+	int ret;
+	int i;
+	size_t j;
+
+	for (i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--bytes") == 0) {
+			if (++i >= argc || parse_size(argv[i], &random_byte_count)) {
+				print_usage(argv[0]);
+				return 2;
+			}
+		} else if (strcmp(argv[i], "--write") == 0) {
+			write_output = true;
+		} else if (strcmp(argv[i], "--prompt-write") == 0) {
+			prompt_write = true;
+		} else if (strcmp(argv[i], "--benchmark") == 0) {
+			run_benchmark_mode = true;
+			if (i + 2 < argc && argv[i + 1][0] != '-' &&
+			    argv[i + 2][0] != '-') {
+				if (parse_size(argv[i + 1], &benchmark_bytes) ||
+				    parse_int(argv[i + 2], &benchmark_iterations)) {
+					print_usage(argv[0]);
+					return 2;
+				}
+				i += 2;
+			}
+		} else if (strcmp(argv[i], "--status") == 0) {
+			print_status = true;
+		} else if (strcmp(argv[i], "--help") == 0) {
+			print_usage(argv[0]);
+			return 0;
+		} else {
+			print_usage(argv[0]);
+			return 2;
+		}
+	}
+
+	if (run_benchmark_mode) {
+		ret = run_benchmark(benchmark_bytes, benchmark_iterations);
+		if (print_status)
+			health_monitor_print_report(stdout);
+		return ret ? 1 : 0;
+	}
+
+	if (!random_byte_count) {
+		fprintf(stderr, "--bytes must be greater than zero\n");
+		return 2;
+	}
+
+	random_bytes = malloc(random_byte_count);
+	if (!random_bytes) {
+		fprintf(stderr, "Failed to allocate %zu bytes\n", random_byte_count);
+		return 1;
+	}
+
+	ret = init_rng();
+	if (ret) {
+		fprintf(stderr, "Failed to initialize RNG: %d\n", ret);
+		free(random_bytes);
+		return 1;
+	}
+
+	ret = get_random_bytes(random_bytes, random_byte_count);
+	if (ret) {
+		fprintf(stderr, "Failed to generate random bytes: %d\n", ret);
+		shutdown_rng();
+		free(random_bytes);
+		return 1;
+	}
+
+	for (j = 0; j < random_byte_count; j++)
+		printf("%02x", random_bytes[j]);
+	printf("\n");
+
+	if (prompt_write && !write_output)
+		write_output = should_prompt_write();
+
+	if (write_output && write_random_file(random_bytes, random_byte_count)) {
+		fprintf(stderr, "Failed to write %s\n", RANDOM_OUTPUT_FILE);
+		shutdown_rng();
+		free(random_bytes);
+		return 1;
+	}
+
+	if (print_status)
+		health_monitor_print_report(stdout);
+
+	shutdown_rng();
+	free(random_bytes);
+	return 0;
+}

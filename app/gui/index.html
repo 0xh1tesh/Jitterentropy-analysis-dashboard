@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jitterentropy Analysis Dashboard</title>
+  <style>
+    :root {
+      --surface-0: #11161d;
+      --surface-1: #171e27;
+      --surface-2: #1d2631;
+      --surface-raised: #242f3b;
+      --border: #34414e;
+      --border-subtle: #28333e;
+      --text: #e6ebef;
+      --text-muted: #9ba8b5;
+      --text-faint: #6f7d8a;
+      --cyan: #52b9d4;
+      --cyan-dim: #2b6679;
+      --green: #63ba88;
+      --amber: #d8a85a;
+      --red: #d66b6b;
+      --grid: rgba(159, 178, 192, .12);
+      --sans: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      --mono: "Cascadia Mono", "Consolas", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 720px;
+      min-height: 520px;
+      margin: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: var(--surface-0);
+      font-family: var(--sans);
+      font-size: 14px;
+    }
+
+    .app-shell { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      min-height: 70px;
+      padding: 12px 24px;
+      background: var(--surface-1);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .identity { display: flex; align-items: center; gap: 12px; min-width: 220px; }
+    .identity-mark {
+      width: 30px; height: 30px; border: 2px solid var(--cyan); border-radius: 4px;
+      position: relative; opacity: .9;
+    }
+    .identity-mark::before, .identity-mark::after {
+      content: ""; position: absolute; background: var(--cyan);
+    }
+    .identity-mark::before { width: 14px; height: 2px; left: 6px; top: 12px; }
+    .identity-mark::after { width: 2px; height: 14px; left: 12px; top: 6px; }
+    .identity h1 { margin: 0; font-size: 17px; line-height: 1.2; font-weight: 650; letter-spacing: -.015em; }
+    .identity p { margin: 3px 0 0; color: var(--text-muted); font-size: 12px; }
+
+    .controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+    .control-group { display: flex; align-items: center; gap: 7px; padding: 7px 8px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-0); }
+    label { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: .045em; text-transform: uppercase; }
+    input {
+      width: 72px; min-height: 28px; padding: 4px 7px; color: var(--text); background: var(--surface-2);
+      border: 1px solid var(--border); border-radius: 3px; font: 12px var(--mono); text-align: right;
+      transition: border-color .15s ease, background-color .15s ease;
+    }
+    input:focus { outline: none; border-color: var(--cyan); background: #202d37; }
+    input:disabled { color: var(--text-faint); cursor: not-allowed; }
+    button { font: 600 12px var(--sans); cursor: pointer; }
+    .btn {
+      min-height: 29px; padding: 5px 11px; color: #edf4f6; background: #315e6d; border: 1px solid #478da3;
+      border-radius: 3px; letter-spacing: .015em; transition: background-color .15s ease, border-color .15s ease, transform .1s ease;
+    }
+    .btn:hover:not(:disabled) { background: #3b7284; border-color: #67bdd5; }
+    .btn:active:not(:disabled) { transform: translateY(1px); }
+    .btn:focus-visible, .tab-btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+    .btn-secondary { color: var(--text); background: var(--surface-raised); border-color: #566572; }
+    .btn-secondary:hover:not(:disabled) { background: #354452; border-color: #778895; }
+    .btn:disabled { color: var(--text-faint); background: var(--surface-2); border-color: var(--border-subtle); cursor: not-allowed; }
+
+    .status { display: flex; align-items: center; gap: 7px; min-width: 106px; padding: 7px 9px; color: var(--text-muted); border: 1px solid var(--border-subtle); border-radius: 4px; background: var(--surface-0); font-size: 12px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); transition: background-color .2s ease; }
+    .status.healthy { color: #b6d9c4; border-color: #3f7658; }
+    .status.healthy .status-dot { background: var(--green); }
+    .status.busy { color: #e5c68e; border-color: #806233; }
+    .status.busy .status-dot { background: var(--amber); animation: status-pulse 1.5s ease-in-out infinite; }
+    .status.error { color: #e3a0a0; border-color: #8d4d4d; }
+    .status.error .status-dot { background: var(--red); }
+    @keyframes status-pulse { 50% { opacity: .45; } }
+
+    main { min-height: 0; display: grid; grid-template-rows: auto 1fr; padding: 16px 24px 14px; gap: 12px; }
+    .tab-list { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+    .tab-btn { position: relative; padding: 8px 14px 9px; color: var(--text-muted); background: transparent; border: 0; border-radius: 3px 3px 0 0; }
+    .tab-btn:hover { color: var(--text); background: rgba(255,255,255,.035); }
+    .tab-btn.active { color: var(--text); }
+    .tab-btn.active::after { content: ""; position: absolute; right: 10px; bottom: -1px; left: 10px; height: 2px; background: var(--cyan); }
+
+    .workspace { min-height: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-1); overflow: hidden; }
+    .tab-content { display: none; height: 100%; grid-template-rows: auto 1fr; }
+    .tab-content.active { display: grid; animation: view-enter .16s ease-out; }
+    @keyframes view-enter { from { opacity: .55; } to { opacity: 1; } }
+    .metric-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); min-height: 70px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+    .metric { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; padding: 10px 15px; border-right: 1px solid var(--border-subtle); }
+    .metric:last-child { border-right: 0; }
+    .metric-label { color: var(--text-muted); font-size: 10px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+    .metric-value { overflow: hidden; color: var(--text); font: 600 16px var(--mono); letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
+    .metric-value.live { color: #9bd6e5; }
+    .metric-value.good { color: #a6d9b8; }
+    .metric-value.warn { color: #e2c382; }
+    .metric-value.error { color: #df9898; }
+    .metric-strip.dense { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+    .metric.capture-timing-card { min-width: 140px; }
+    .capture-timing-value {
+      overflow: visible !important;
+      white-space: normal !important;
+      word-break: break-word !important;
+      font-size: 12px !important;
+      line-height: 1.25 !important;
+      color: var(--text-muted) !important;
+    }
+    .metric small { color: var(--text-faint); font: 10px var(--mono); }
+    .scope-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+    .scope-action, .export-action { min-height: 24px; padding: 3px 6px; color: var(--text-muted); background: transparent; border: 1px solid var(--border); border-radius: 3px; font-size: 10px; }
+    .scope-action:hover, .scope-action.active, .export-action:hover { color: var(--text); border-color: var(--cyan); background: rgba(82,185,212,.09); }
+    .scope-action.active { color: #b9dfe9; }
+    .canvas-wrap { min-width: 0; min-height: 0; display: grid; padding: 14px 16px 16px; background: var(--surface-0); }
+    canvas { display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; background: #10161c; border: 1px solid var(--border-subtle); border-radius: 3px; }
+
+    .timeline-content { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+    .timeline-panel {
+      min-width: 0;
+      min-height: 0;
+      padding: 16px 20px 24px;
+      overflow-y: auto;
+      background: var(--surface-0);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .timeline-section-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 6px;
+    }
+    .timeline-section-header .section-title {
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .timeline-section-header .section-subtitle {
+      color: var(--text-faint);
+      font-size: 11px;
+      font-family: var(--mono);
+    }
+
+    .timeline-chart-box {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    .timeline-ruler {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      align-items: center;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+    }
+    .ruler-meta-header {
+      color: var(--text-muted);
+      font: 600 11px var(--mono);
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .timeline-scale {
+      position: relative;
+      height: 18px;
+      background-image: linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    }
+    .timeline-scale span {
+      position: absolute;
+      bottom: 0;
+      transform: translateX(-50%);
+      font: 10px var(--mono);
+      color: var(--text-faint);
+    }
+
+    .timeline-track {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      align-items: center;
+      min-height: 52px;
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 0 14px;
+      background: var(--surface-1);
+      transition: background-color .15s ease;
+    }
+    .timeline-track:last-child {
+      border-bottom: none;
+    }
+    .timeline-track:hover {
+      background: #1c2430;
+    }
+
+    .track-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding-right: 12px;
+      border-right: 1px solid var(--border-subtle);
+    }
+    .track-num {
+      font: 700 11px var(--mono);
+      color: var(--text-faint);
+      background: var(--surface-2);
+      padding: 2px 6px;
+      border-radius: 3px;
+      border: 1px solid var(--border-subtle);
+    }
+    .track-details {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1;
+    }
+    .track-name {
+      color: var(--text);
+      font: 600 12px var(--sans);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .track-duration {
+      color: var(--text-muted);
+      font: 11px var(--mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .track-lane {
+      position: relative;
+      height: 34px;
+      overflow: hidden;
+      border-radius: 3px;
+      background-image: linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    }
+    .execution-bar {
+      position: absolute;
+      top: 7px;
+      height: 20px;
+      min-width: 14px;
+      border-radius: 3px;
+      opacity: .92;
+      box-shadow: inset 0 1px rgba(255,255,255,.25), 0 0 4px rgba(0,0,0,.3);
+      transition: left .14s ease-out, width .14s ease-out;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .execution-bar.microsecond-stage::after {
+      content: "";
+      width: 3px;
+      height: 3px;
+      background: #FFF;
+      border-radius: 50%;
+      box-shadow: 0 0 3px #FFF;
+    }
+    .execution-bar.request { background: var(--cyan); }
+    .execution-bar.entropy { background: var(--green); }
+    .execution-bar.processing { background: var(--amber); }
+    .execution-bar.serialization { background: #8797a5; }
+    .track-micro-tag { font-size: 10px; color: var(--text-faint); margin-left: 4px; }
+
+    .analysis-summary {
+      padding: 14px 16px;
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+    }
+    .analysis-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .analysis-heading {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .analysis-badge {
+      font: 600 10px var(--mono);
+      padding: 2px 7px;
+      border-radius: 3px;
+      background: rgba(216,168,90,.15);
+      color: #e2c382;
+      border: 1px solid #755b31;
+    }
+    .analysis-value { color: #d9e4e8; font: 600 14px var(--mono); }
+    .analysis-note { margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+
+    .stage-analysis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .stage-card {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 12px;
+      border: 1px solid var(--border-subtle);
+      border-left: 3px solid var(--text-faint);
+      border-radius: 4px;
+      background: var(--surface-1);
+    }
+    .stage-card.bottleneck {
+      background: rgba(216,168,90,.06);
+      border-color: #5c4728;
+      border-left-color: var(--amber);
+    }
+    .stage-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .stage-card-title {
+      color: var(--text);
+      font: 600 12px var(--sans);
+    }
+    .stage-card-tag {
+      font: 600 10px var(--mono);
+      padding: 2px 5px;
+      border-radius: 3px;
+      background: var(--surface-2);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+    }
+    .stage-card-tag.bottleneck {
+      background: rgba(216,168,90,.2);
+      color: #e2c382;
+      border-color: var(--amber);
+    }
+    .stage-card-data {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 4px 10px;
+      margin: 10px 0;
+      color: var(--text-muted);
+      font: 11px var(--mono);
+    }
+    .stage-card-data strong {
+      color: #cbd5db;
+      font-weight: 600;
+      text-align: right;
+    }
+    .stage-card-desc {
+      color: var(--text-faint);
+      font-size: 11px;
+      line-height: 1.3;
+      padding-top: 6px;
+      border-top: 1px dashed var(--border-subtle);
+    }
+
+    footer { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; min-height: 112px; padding: 0 24px; background: var(--surface-1); border-top: 1px solid var(--border); }
+    .footer-metric { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 9px 12px; border-right: 1px solid var(--border-subtle); }
+    .footer-metric:nth-child(4n+1) { padding-left: 0; }
+    .footer-metric:nth-child(4n) { padding-right: 0; border-right: 0; }
+    .footer-metric:nth-child(-n+4) { border-bottom: 1px solid var(--border-subtle); }
+    .footer-label { color: var(--text-faint); font-size: 10px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+    .footer-value { margin-top: 4px; overflow: hidden; color: var(--text); font: 600 12px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .hex-value { color: #b8d8e1; font-weight: 500; }
+
+    @media (max-width: 1600px) {
+      .metric-strip.dense { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    }
+    @media (max-width: 1100px) {
+      header { align-items: flex-start; }
+      .controls { max-width: 620px; }
+      .metric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .metric:nth-child(3) { border-right: 0; }
+      .metric:nth-child(-n+3) { border-bottom: 1px solid var(--border-subtle); }
+      footer { grid-template-columns: repeat(3, minmax(100px, 1fr)) minmax(200px, 2fr); }
+      .footer-metric:nth-child(3) { border-right: 0; }
+      .timeline-ruler, .timeline-track { grid-template-columns: minmax(145px, .8fr) minmax(0, 3.2fr); gap: 12px; }
+      .metric-strip.dense { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .timeline-analysis { grid-template-columns: 1fr; }
+      .stage-analysis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header>
+      <div class="identity">
+        <div class="identity-mark" aria-hidden="true"></div>
+        <div>
+          <h1>Jitterentropy</h1>
+          <p>Analysis Dashboard</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="control-group">
+          <label for="input-generate-bytes">Generate bytes</label>
+          <input type="number" id="input-generate-bytes" value="512" min="1" max="65536">
+          <button class="btn" id="btn-generate">Generate</button>
+        </div>
+        <div class="control-group">
+          <label for="input-bench-bytes">Bytes per call</label>
+          <input type="number" id="input-bench-bytes" value="1024" min="1" max="65536">
+          <label for="input-bench-iter">Iterations</label>
+          <input type="number" id="input-bench-iter" value="1000" min="1" max="100000">
+          <button class="btn" id="btn-benchmark">Benchmark</button>
+          <button class="btn btn-secondary" id="btn-cancel" disabled>Cancel</button>
+        </div>
+        <div class="status" id="status-badge" aria-live="polite">
+          <span class="status-dot"></span><span id="status-text">Not initialized</span>
+        </div>
+        <div class="control-group" aria-label="Export controls">
+          <button class="export-action" id="export-json" title="Export the latest telemetry as JSON.">Export JSON</button>
+          <button class="export-action" id="export-csv" title="Export available history and pipeline data as CSV.">Export CSV</button>
+          <button class="export-action" id="export-png" title="Export the current graph or timing diagram as PNG.">Export PNG</button>
+          <button class="export-action" id="copy-metrics" title="Copy current measured and derived diagnostics.">Copy metrics</button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <nav class="tab-list" aria-label="Analysis views">
+        <button class="tab-btn active" data-tab="oscilloscope">Oscilloscope</button>
+        <button class="tab-btn" data-tab="performance">Performance</button>
+        <button class="tab-btn" data-tab="timeline">Timing diagram</button>
+      </nav>
+
+      <section class="workspace">
+        <div class="tab-content active" id="view-oscilloscope">
+          <div class="metric-strip dense">
+            <div class="metric"><span class="metric-label">Minimum delta</span><span class="metric-value live" id="scope-min">0.0000 µs</span></div>
+            <div class="metric"><span class="metric-label">Maximum delta</span><span class="metric-value" id="scope-max">0.0000 µs</span></div>
+            <div class="metric"><span class="metric-label">Median</span><span class="metric-value good" id="scope-median">0.0000 µs</span></div>
+            <div class="metric"><span class="metric-label">95th percentile</span><span class="metric-value warn" id="scope-p95">0.0000 µs</span></div>
+            <div class="metric"><span class="metric-label">Standard deviation</span><span class="metric-value" id="scope-stddev">0.0000 µs</span></div>
+            <div class="metric"><span class="metric-label">Samples</span><span class="metric-value" id="scope-count">0</span></div>
+            <div class="metric" title="Freeze holds the displayed telemetry snapshot; reset returns to live data. Autoscale controls the vertical scale calculation."><span class="metric-label">Capture controls</span><div class="scope-actions"><button class="scope-action active" id="scope-autoscale">Autoscale</button><button class="scope-action" id="scope-freeze">Freeze</button><button class="scope-action" id="scope-reset">Reset</button></div></div>
+            <div class="metric" title="Latest jitter sample and arithmetic mean of the retained jitter capture."><span class="metric-label">Current / average</span><span class="metric-value" id="scope-current-average">0.0000 / 0.0000 µs</span></div>
+            <div class="metric capture-timing-card" title="Jitter samples do not carry timestamps in the existing telemetry contract, so exact capture duration and sample frequency are intentionally not inferred."><span class="metric-label">Capture timing</span><span class="metric-value capture-timing-value" id="scope-capture-meta">Not timestamped</span></div>
+          </div>
+          <div class="canvas-wrap"><canvas id="canvas-oscilloscope" aria-label="CPU timing jitter waveform"></canvas></div>
+        </div>
+
+        <div class="tab-content" id="view-performance">
+          <div class="metric-strip dense">
+            <div class="metric"><span class="metric-label">Current throughput</span><span class="metric-value good" id="perf-throughput">0.00 MB/s</span></div>
+            <div class="metric"><span class="metric-label">Average latency</span><span class="metric-value" id="perf-latency">0.000 ms</span></div>
+            <div class="metric"><span class="metric-label">Total generated</span><span class="metric-value" id="perf-total-bytes">0 B</span></div>
+            <div class="metric"><span class="metric-label">Calls / failures</span><span class="metric-value" id="perf-calls">0 / 0</span></div>
+            <div class="metric"><span class="metric-label">Failures</span><span class="metric-value error" id="perf-failures">0</span></div>
+            <div class="metric" title="Peak and lowest non-zero per-call throughput in the retained history."><span class="metric-label">Throughput range</span><span class="metric-value" id="perf-throughput-range">0.00–0.00 MB/s</span></div>
+            <div class="metric" title="Rolling latency mean and population standard deviation over the most recent retained calls."><span class="metric-label">Latency diagnostics</span><span class="metric-value" id="perf-latency-diagnostics">0.000 ms</span><small id="perf-latency-trend">Stable</small></div>
+          </div>
+          <div class="canvas-wrap"><canvas id="canvas-performance" aria-label="Generation latency history with rolling average"></canvas></div>
+        </div>
+
+        <div class="tab-content timeline-content" id="view-timeline">
+          <div class="metric-strip">
+            <div class="metric"><span class="metric-label">Pipeline status</span><span class="metric-value good" id="tl-status">Ready</span></div>
+            <div class="metric"><span class="metric-label">End-to-end latency</span><span class="metric-value" id="tl-total-duration">0.000 ms</span></div>
+            <div class="metric"><span class="metric-label">Reference time</span><span class="metric-value" id="tl-request-time">N/A</span></div>
+            <div class="metric"><span class="metric-label">Measured stages</span><span class="metric-value">4</span></div>
+            <div class="metric" title="The longest measured stage in the current pipeline record."><span class="metric-label">Bottleneck</span><span class="metric-value warn" id="tl-bottleneck">N/A</span></div>
+            <div class="metric" title="Telemetry serialization duration divided by measured end-to-end time."><span class="metric-label">Serialization cost</span><span class="metric-value" id="tl-serialization-cost">0.0%</span></div>
+          </div>
+          <div class="timeline-panel">
+            <div class="timeline-section-header">
+              <span class="section-title">Execution Pipeline Analysis</span>
+              <span class="section-subtitle">High-precision QueryPerformanceCounter stage trace</span>
+            </div>
+
+            <div class="timeline-chart-box">
+              <div class="timeline-ruler">
+                <div class="ruler-meta-header">Stage / Share</div>
+                <div class="timeline-scale" id="timeline-scale"></div>
+              </div>
+              <div class="timeline-track">
+                <div class="track-meta">
+                  <div class="track-num">01</div>
+                  <div class="track-details">
+                    <span class="track-name">Request dispatch</span>
+                    <span class="track-duration" id="tl-time-request">0.0 µs &middot; 0.00%</span>
+                  </div>
+                </div>
+                <div class="track-lane"><div class="execution-bar request" id="bar-request"></div></div>
+              </div>
+              <div class="timeline-track">
+                <div class="track-meta">
+                  <div class="track-num">02</div>
+                  <div class="track-details">
+                    <span class="track-name">Entropy collection</span>
+                    <span class="track-duration" id="tl-time-entropy">0.0 µs &middot; 0.00%</span>
+                  </div>
+                </div>
+                <div class="track-lane"><div class="execution-bar entropy" id="bar-entropy"></div></div>
+              </div>
+              <div class="timeline-track">
+                <div class="track-meta">
+                  <div class="track-num">03</div>
+                  <div class="track-details">
+                    <span class="track-name">Result processing</span>
+                    <span class="track-duration" id="tl-time-processing">0.0 µs &middot; 0.00%</span>
+                  </div>
+                </div>
+                <div class="track-lane"><div class="execution-bar processing" id="bar-processing"></div></div>
+              </div>
+              <div class="timeline-track">
+                <div class="track-meta">
+                  <div class="track-num">04</div>
+                  <div class="track-details">
+                    <span class="track-name">Telemetry serialization</span>
+                    <span class="track-duration" id="tl-time-serialization">0.0 µs &middot; 0.00%</span>
+                  </div>
+                </div>
+                <div class="track-lane"><div class="execution-bar serialization" id="bar-serialization"></div></div>
+              </div>
+            </div>
+
+            <div class="analysis-summary" title="Bottleneck analysis and pipeline execution insight">
+              <div class="analysis-header-row">
+                <span class="analysis-heading">Pipeline observation &amp; bottleneck insight</span>
+                <span class="analysis-badge" id="tl-analysis-badge">No capture</span>
+              </div>
+              <div class="analysis-value" id="tl-analysis-bottleneck">No capture data available</div>
+              <p class="analysis-note" id="tl-analysis-note">Run a generation or benchmark to inspect the measured execution pipeline.</p>
+            </div>
+
+            <div class="timeline-section-header">
+              <span class="section-title">Structured Stage Summaries</span>
+              <span class="section-subtitle">Microsecond-level breakdown per stage</span>
+            </div>
+            <div class="stage-analysis" id="timeline-stage-analysis"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-metric"><span class="footer-label">RNG state</span><span class="footer-value" id="ft-init">Not initialized</span></div>
+      <div class="footer-metric" title="Whether a generate or benchmark worker is active."><span class="footer-label">Worker state</span><span class="footer-value" id="ft-busy">Idle</span></div>
+      <div class="footer-metric" title="Most recently delivered generate or benchmark result."><span class="footer-label">Last operation</span><span class="footer-value" id="ft-operation">None</span></div>
+      <div class="footer-metric" title="Aggregate bytes per second from health telemetry."><span class="footer-label">Throughput</span><span class="footer-value" id="ft-throughput">0.00 MB/s</span></div>
+      <div class="footer-metric"><span class="footer-label">Last error</span><span class="footer-value" id="ft-error">0 (OK)</span></div>
+      <div class="footer-metric" title="Jitter range and standard deviation from the current capture."><span class="footer-label">Jitter diagnostics</span><span class="footer-value" id="ft-jitter">No samples</span></div>
+      <div class="footer-metric" title="Longest measured pipeline stage."><span class="footer-label">Pipeline bottleneck</span><span class="footer-value" id="ft-bottleneck">No capture</span></div>
+      <div class="footer-metric"><span class="footer-label">Hex sample preview</span><span class="footer-value hex-value" id="ft-hex">No sample generated</span></div>
+    </footer>
+  </div>
+
+  <script>
+    let currentTab = 'oscilloscope';
+    let latestTelemetry = null;
+    let pendingRender = null;
+    let renderFrame = 0;
+    let frozenTelemetry = null;
+    let scopeAutoscale = true;
+    let scopeScale = null;
+    let lastActionFailed = false;
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(item => item.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(item => item.classList.remove('active'));
+        btn.classList.add('active');
+        currentTab = btn.dataset.tab;
+        document.getElementById(`view-${currentTab}`).classList.add('active');
+        resizeCanvases();
+        if (latestTelemetry) scheduleRender(latestTelemetry);
+      });
+    });
+
+    const btnGenerate = document.getElementById('btn-generate');
+    const btnBenchmark = document.getElementById('btn-benchmark');
+    const btnCancel = document.getElementById('btn-cancel');
+    const btnScopeAutoscale = document.getElementById('scope-autoscale');
+    const btnScopeFreeze = document.getElementById('scope-freeze');
+    const btnScopeReset = document.getElementById('scope-reset');
+
+    btnGenerate.addEventListener('click', () => {
+      const bytes = parseInt(document.getElementById('input-generate-bytes').value, 10) || 512;
+      window.chrome.webview.postMessage({ action: 'generate', bytes: bytes });
+    });
+    btnBenchmark.addEventListener('click', () => {
+      const bytes = parseInt(document.getElementById('input-bench-bytes').value, 10) || 1024;
+      const iter = parseInt(document.getElementById('input-bench-iter').value, 10) || 1000;
+      window.chrome.webview.postMessage({ action: 'benchmark', bytesPerCall: bytes, iterations: iter });
+    });
+    btnCancel.addEventListener('click', () => window.chrome.webview.postMessage({ action: 'cancelBenchmark' }));
+    btnScopeAutoscale.addEventListener('click', () => {
+      scopeAutoscale = !scopeAutoscale;
+      btnScopeAutoscale.classList.toggle('active', scopeAutoscale);
+      btnScopeAutoscale.textContent = scopeAutoscale ? 'Autoscale' : 'Scale held';
+      if (scopeAutoscale) scopeScale = null;
+      if (latestTelemetry) scheduleRender(frozenTelemetry || latestTelemetry);
+    });
+    btnScopeFreeze.addEventListener('click', () => {
+      frozenTelemetry = frozenTelemetry ? null : structuredClone(latestTelemetry);
+      btnScopeFreeze.classList.toggle('active', !!frozenTelemetry);
+      btnScopeFreeze.textContent = frozenTelemetry ? 'Resume live' : 'Freeze';
+      if (latestTelemetry) scheduleRender(frozenTelemetry || latestTelemetry);
+    });
+    btnScopeReset.addEventListener('click', () => {
+      frozenTelemetry = null;
+      scopeAutoscale = true;
+      scopeScale = null;
+      btnScopeFreeze.classList.remove('active');
+      btnScopeFreeze.textContent = 'Freeze';
+      btnScopeAutoscale.classList.add('active');
+      btnScopeAutoscale.textContent = 'Autoscale';
+      if (latestTelemetry) scheduleRender(latestTelemetry);
+    });
+
+    function resizeCanvases() {
+      ['canvas-oscilloscope', 'canvas-performance'].forEach(id => {
+        const canvas = document.getElementById(id);
+        if (canvas && canvas.offsetParent !== null) {
+          const width = Math.max(1, Math.floor(canvas.clientWidth * window.devicePixelRatio));
+          const height = Math.max(1, Math.floor(canvas.clientHeight * window.devicePixelRatio));
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+          }
+        }
+      });
+    }
+    const canvasResizeObserver = new ResizeObserver(() => {
+      resizeCanvases();
+      if (latestTelemetry) scheduleRender(latestTelemetry);
+    });
+    document.querySelectorAll('.canvas-wrap').forEach(element => canvasResizeObserver.observe(element));
+    window.addEventListener('resize', () => { resizeCanvases(); if (latestTelemetry) scheduleRender(latestTelemetry); });
+    setTimeout(resizeCanvases, 100);
+
+    window.chrome.webview.addEventListener('message', event => {
+      const data = event.data;
+      if (!data || data.type !== 'telemetry') return;
+      latestTelemetry = data;
+      updateControlsAndFooter(data);
+      scheduleRender(frozenTelemetry || data);
+    });
+
+    function updateControlsAndFooter(data) {
+      const isBusy = data.busy;
+      btnGenerate.disabled = isBusy;
+      btnBenchmark.disabled = isBusy;
+      btnCancel.disabled = !isBusy;
+      const badge = document.getElementById('status-badge');
+      const statusText = document.getElementById('status-text');
+      badge.className = `status ${isBusy ? 'busy' : (lastActionFailed ? 'error' : (data.health && data.health.initialized ? 'healthy' : ''))}`;
+      statusText.textContent = isBusy ? 'Running' : (lastActionFailed ? 'Operation failed' : (data.health && data.health.initialized ? 'Ready' : 'Not initialized'));
+
+      if (data.health) {
+        const initialized = data.health.initialized;
+        const state = document.getElementById('ft-init');
+        state.textContent = initialized ? 'Initialized' : 'Not initialized';
+        state.style.color = initialized ? 'var(--green)' : 'var(--red)';
+        document.getElementById('ft-busy').textContent = isBusy ? 'Running' : 'Idle';
+        document.getElementById('ft-throughput').textContent = `${((data.health.throughput_bytes_per_second || 0) / (1024 * 1024)).toFixed(2)} MB/s`;
+        document.getElementById('ft-error').textContent = data.health.last_error_code === 0 ? '0 (OK)' : data.health.last_error_code;
+      }
+      if (data.actionResult) {
+        lastActionFailed = data.actionResult.status !== 0;
+        const operation = `${data.actionResult.action || 'operation'} · ${data.actionResult.status === 0 ? 'OK' : `error ${data.actionResult.status}`}`;
+        document.getElementById('ft-operation').textContent = operation;
+        if (data.actionResult.hex) document.getElementById('ft-hex').textContent = data.actionResult.hex;
+      }
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) return '0 B';
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const index = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+      return `${parseFloat((bytes / Math.pow(1024, index)).toFixed(2))} ${sizes[index]}`;
+    }
+
+    function scheduleRender(data) {
+      pendingRender = data;
+      if (renderFrame) return;
+      renderFrame = requestAnimationFrame(() => {
+        renderFrame = 0;
+        if (pendingRender) renderCurrentView(pendingRender);
+      });
+    }
+
+    function renderCurrentView(data) {
+      if (currentTab === 'oscilloscope') renderOscilloscope(data.jitter || []);
+      else if (currentTab === 'performance') renderPerformance(data.history || {}, data.health || {});
+      else renderTimeline(data.timeline);
+    }
+
+    function getCanvasContext(canvas) {
+      const ctx = canvas.getContext('2d');
+      const ratio = window.devicePixelRatio || 1;
+      const width = canvas.width / ratio;
+      const height = canvas.height / ratio;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      return { ctx, width, height };
+    }
+
+    function niceScale(min, max, desiredTicks = 5) {
+      const range = Math.max(max - min, Number.EPSILON);
+      const rawStep = range / desiredTicks;
+      const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+      const normalized = rawStep / magnitude;
+      const niceNormalized = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+      const step = niceNormalized * magnitude;
+      return { min: Math.floor(min / step) * step, max: Math.ceil(max / step) * step, step };
+    }
+
+    function drawChartGrid(ctx, width, height, plot, yMin, yMax, formatter, xTickFormatter) {
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#10161c'; ctx.fillRect(0, 0, width, height);
+      ctx.font = '10px Cascadia Mono, Consolas, monospace'; ctx.textBaseline = 'middle'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(159, 178, 192, .12)'; ctx.fillStyle = '#81909d'; ctx.lineWidth = 1;
+      const scale = niceScale(yMin, yMax);
+      const horizontalLines = Math.max(1, Math.round((scale.max - scale.min) / scale.step));
+      for (let line = 0; line <= horizontalLines; line++) {
+        const y = plot.top + (plot.height * line / horizontalLines);
+        const value = scale.max - ((scale.max - scale.min) * line / horizontalLines);
+        ctx.beginPath(); ctx.moveTo(plot.left, y + .5); ctx.lineTo(plot.left + plot.width, y + .5); ctx.stroke();
+        ctx.fillText(formatter(value), 8, y);
+      }
+      for (let line = 0; line <= 5; line++) {
+        const x = plot.left + (plot.width * line / 5);
+        ctx.beginPath(); ctx.moveTo(x + .5, plot.top); ctx.lineTo(x + .5, plot.top + plot.height); ctx.stroke();
+        if (xTickFormatter) { ctx.textAlign = line === 0 ? 'left' : line === 5 ? 'right' : 'center'; ctx.fillText(xTickFormatter(line / 5), x, plot.top + plot.height + 18); }
+      }
+      ctx.textAlign = 'left';
+      ctx.strokeStyle = '#43515e'; ctx.strokeRect(plot.left + .5, plot.top + .5, plot.width, plot.height);
+      return scale;
+    }
+
+    function renderOscilloscope(jitter) {
+      const { ctx, width, height } = getCanvasContext(document.getElementById('canvas-oscilloscope'));
+      if (!width || !height) return;
+      const plot = { left: 76, top: 22, width: Math.max(1, width - 96), height: Math.max(1, height - 58) };
+      const n = jitter.length;
+      document.getElementById('scope-count').textContent = n;
+      document.getElementById('scope-capture-meta').textContent = n ? `${n} samples · not timestamped` : 'Not timestamped';
+      if (!n) { drawChartGrid(ctx, width, height, plot, 0, 1, value => `${value.toFixed(2)} µs`, fraction => `-${Math.round((1 - fraction) * 255)}`); return; }
+      let min = jitter[0], max = jitter[0], sum = 0;
+      jitter.forEach(value => { min = Math.min(min, value); max = Math.max(max, value); sum += value; });
+      const mean = sum / n;
+      const sorted = [...jitter].sort((a, b) => a - b);
+      const median = n % 2 ? sorted[Math.floor(n / 2)] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+      const p95 = sorted[Math.min(n - 1, Math.floor(n * .95))];
+      const stddev = Math.sqrt(jitter.reduce((total, value) => total + Math.pow(value - mean, 2), 0) / n);
+      document.getElementById('scope-min').textContent = `${min.toFixed(4)} µs`;
+      document.getElementById('scope-max').textContent = `${max.toFixed(4)} µs`;
+      document.getElementById('scope-median').textContent = `${median.toFixed(4)} µs`;
+      document.getElementById('scope-p95').textContent = `${p95.toFixed(4)} µs`;
+      document.getElementById('scope-stddev').textContent = `${stddev.toFixed(4)} µs`;
+      document.getElementById('scope-current-average').textContent = `${jitter[n - 1].toFixed(4)} / ${mean.toFixed(4)} µs`;
+      document.getElementById('ft-jitter').textContent = `${min.toFixed(3)}–${max.toFixed(3)} µs · σ ${stddev.toFixed(3)}`;
+      const padding = Math.max((max - min) * .14, .01);
+      const rawLow = Math.max(0, min - padding), rawHigh = max + padding;
+      if (scopeAutoscale || !scopeScale) scopeScale = niceScale(rawLow, rawHigh);
+      const displayScale = scopeScale;
+      const low = displayScale.min, high = displayScale.max, range = Math.max(high - low, .01);
+      drawChartGrid(ctx, width, height, plot, low, high, value => `${value.toFixed(2)} µs`, fraction => `-${Math.round((1 - fraction) * Math.max(n - 1, 1))}`);
+      const point = (value, index) => ({ x: plot.left + (plot.width * index / Math.max(n - 1, 1)), y: plot.top + plot.height - ((value - low) / range) * plot.height });
+      const medianY = point(median, 0).y;
+      ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(99, 186, 136, .65)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(plot.left, medianY); ctx.lineTo(plot.left + plot.width, medianY); ctx.stroke(); ctx.setLineDash([]);
+      const gradient = ctx.createLinearGradient(0, plot.top, 0, plot.top + plot.height);
+      gradient.addColorStop(0, 'rgba(82, 185, 212, .22)'); gradient.addColorStop(1, 'rgba(82, 185, 212, 0)');
+      ctx.beginPath(); jitter.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.lineTo(plot.left + plot.width, plot.top + plot.height); ctx.lineTo(plot.left, plot.top + plot.height); ctx.closePath(); ctx.fillStyle = gradient; ctx.fill();
+      ctx.beginPath(); jitter.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.strokeStyle = 'rgba(82, 185, 212, .16)'; ctx.lineWidth = 4; ctx.stroke();
+      ctx.strokeStyle = '#78c8de'; ctx.lineWidth = 1.25; ctx.stroke();
+      ctx.fillStyle = '#81909d'; ctx.font = '10px Segoe UI, sans-serif'; ctx.fillText('Sample sequence', plot.left, height - 13);
+    }
+
+    function renderPerformance(history, health) {
+      document.getElementById('perf-throughput').textContent = `${(health.throughput_bytes_per_second ? health.throughput_bytes_per_second / (1024 * 1024) : 0).toFixed(2)} MB/s`;
+      document.getElementById('perf-latency').textContent = `${((health.average_latency_seconds || 0) * 1000).toFixed(3)} ms`;
+      document.getElementById('perf-total-bytes').textContent = formatBytes(health.total_bytes_generated || 0);
+      document.getElementById('perf-calls').textContent = `${(health.generation_call_count || 0).toLocaleString()} / ${health.failure_count || 0}`;
+      document.getElementById('perf-failures').textContent = health.failure_count || 0;
+      const { ctx, width, height } = getCanvasContext(document.getElementById('canvas-performance'));
+      if (!width || !height) return;
+      const plot = { left: 76, top: 22, width: Math.max(1, width - 96), height: Math.max(1, height - 58) };
+      const count = Math.min(history.count || 0, (history.bytes || []).length, (history.durations || []).length);
+      if (!count) {
+        drawChartGrid(ctx, width, height, plot, 0, 1, value => `${value.toFixed(3)} ms`, fraction => `-${Math.round((1 - fraction) * 1)}`);
+        return;
+      }
+      const latency = Array.from({ length: count }, (_, index) => (history.durations[index] || 0) * 1000);
+      const rollingWindow = Math.min(12, Math.max(3, Math.floor(count / 8)));
+      const rollingAverage = latency.map((value, index) => {
+        const start = Math.max(0, index - rollingWindow + 1);
+        const subset = latency.slice(start, index + 1);
+        return subset.reduce((sum, item) => sum + item, 0) / subset.length;
+      });
+      const throughput = Array.from({ length: count }, (_, index) => {
+        const seconds = history.durations[index] > 0 ? history.durations[index] : 0;
+        return seconds ? (history.bytes[index] / (1024 * 1024)) / seconds : 0;
+      });
+      const nonZeroThroughput = throughput.filter(value => value > 0);
+      const peakThroughput = nonZeroThroughput.length ? Math.max(...nonZeroThroughput) : 0;
+      const lowThroughput = nonZeroThroughput.length ? Math.min(...nonZeroThroughput) : 0;
+      const rollingLatest = rollingAverage[rollingAverage.length - 1];
+      const latencyMean = latency.reduce((sum, value) => sum + value, 0) / latency.length;
+      const latencyStd = Math.sqrt(latency.reduce((sum, value) => sum + Math.pow(value - latencyMean, 2), 0) / latency.length);
+      const trendBase = rollingAverage[Math.max(0, rollingAverage.length - Math.min(8, rollingAverage.length))];
+      const trendDelta = rollingLatest - trendBase;
+      const trend = Math.abs(trendDelta) <= Math.max(0.001, trendBase * .03) ? 'Stable' : trendDelta > 0 ? 'Rising latency' : 'Falling latency';
+      document.getElementById('perf-throughput-range').textContent = `${lowThroughput.toFixed(2)}–${peakThroughput.toFixed(2)} MB/s`;
+      document.getElementById('perf-latency-diagnostics').textContent = `${rollingLatest.toFixed(3)} ms · σ ${latencyStd.toFixed(3)}`;
+      document.getElementById('perf-latency-trend').textContent = trend;
+      const values = latency.concat(rollingAverage);
+      const rawLow = Math.min(...values), rawHigh = Math.max(...values);
+      const padding = Math.max((rawHigh - rawLow) * .18, Math.max(rawHigh, .001) * .08, .001);
+      const displayScale = niceScale(Math.max(0, rawLow - padding), rawHigh + padding);
+      const low = displayScale.min, high = displayScale.max;
+      drawChartGrid(ctx, width, height, plot, low, high, value => `${value.toFixed(3)} ms`, fraction => `-${Math.round((1 - fraction) * Math.max(count - 1, 1))}`);
+      const range = Math.max(high - low, .000001);
+      const point = (value, index) => ({ x: plot.left + (plot.width * index / Math.max(count - 1, 1)), y: plot.top + plot.height - ((value - low) / range) * plot.height });
+      const fill = ctx.createLinearGradient(0, plot.top, 0, plot.top + plot.height);
+      fill.addColorStop(0, 'rgba(82, 185, 212, .18)'); fill.addColorStop(1, 'rgba(82, 185, 212, 0)');
+      ctx.beginPath(); latency.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.lineTo(plot.left + plot.width, plot.top + plot.height); ctx.lineTo(plot.left, plot.top + plot.height); ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+      ctx.beginPath(); latency.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.strokeStyle = '#75bdd1'; ctx.lineWidth = 1.15; ctx.stroke();
+      ctx.beginPath(); rollingAverage.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.strokeStyle = '#d8a85a'; ctx.lineWidth = 1.8; ctx.stroke();
+      const anomalies = latency.map((value, index) => value > rollingAverage[index] * 1.25 ? index : -1).filter(index => index >= 0);
+      ctx.fillStyle = '#d8a85a'; anomalies.forEach(index => { const p = point(latency[index], index); ctx.beginPath(); ctx.arc(p.x, p.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
+      ctx.fillStyle = '#81909d'; ctx.font = '10px Segoe UI, sans-serif'; ctx.fillText('Raw latency', plot.left, height - 13);
+      ctx.fillStyle = '#d8a85a'; ctx.fillText('Rolling average', plot.left + 76, height - 13);
+    }
+
+    const STAGE_DESCRIPTIONS = {
+      request: 'Worker thread setup and request initialization.',
+      entropy: 'Hardware execution timing entropy harvesting loop.',
+      processing: 'Hex preview string formatting and health metrics recording.',
+      serialization: 'UTF-8 JSON telemetry serialization for WebView2 bridge.'
+    };
+
+    function renderTimeline(timeline) {
+      const status = document.getElementById('tl-status');
+      if (!timeline) {
+        status.textContent = 'Idle';
+        document.getElementById('tl-total-duration').textContent = '0.000 ms';
+        document.getElementById('tl-request-time').textContent = 'N/A';
+        document.getElementById('tl-bottleneck').textContent = 'N/A';
+        document.getElementById('tl-serialization-cost').textContent = '0.0%';
+        document.getElementById('tl-analysis-badge').textContent = 'No capture';
+        document.getElementById('tl-analysis-bottleneck').textContent = 'No capture data available';
+        document.getElementById('tl-analysis-note').textContent = 'Run a generation or benchmark to inspect the measured execution pipeline.';
+        document.getElementById('timeline-stage-analysis').replaceChildren();
+        updateTimelineScale(0);
+        return;
+      }
+      const request = timeline.request || { start: 0, duration: 0 };
+      const entropy = timeline.entropy || { start: 0, duration: 0 };
+      const processing = timeline.processing || { start: 0, duration: 0 };
+      const serialization = timeline.serialization || { start: 0, duration: 0 };
+      const total = Math.max((serialization.start + serialization.duration) - request.start, .000001);
+
+      status.textContent = 'Captured';
+      document.getElementById('tl-total-duration').textContent = `${(total * 1000).toFixed(3)} ms`;
+      document.getElementById('tl-request-time').textContent = `T0 ${request.start.toFixed(4)} s`;
+
+      const stages = [
+        { key: 'request', name: 'Request dispatch', timing: request },
+        { key: 'entropy', name: 'Entropy collection', timing: entropy },
+        { key: 'processing', name: 'Result processing', timing: processing },
+        { key: 'serialization', name: 'Telemetry serialization', timing: serialization }
+      ];
+
+      const bottleneck = stages.reduce((longest, stage) => stage.timing.duration > longest.timing.duration ? stage : longest, stages[0]);
+      const bottleneckPercent = bottleneck.timing.duration / total * 100;
+      const serializationPercent = serialization.duration / total * 100;
+
+      document.getElementById('tl-bottleneck').textContent = bottleneck.name;
+      document.getElementById('tl-serialization-cost').textContent = `${serializationPercent.toFixed(2)}%`;
+      document.getElementById('tl-analysis-badge').textContent = `Bottleneck: ${bottleneck.name}`;
+      document.getElementById('tl-analysis-bottleneck').textContent = `${bottleneck.name} · ${bottleneckPercent.toFixed(1)}% share (${formatPipelineTime(bottleneck.timing.duration)})`;
+      document.getElementById('tl-analysis-note').textContent = `${bottleneck.name} is the primary pipeline bottleneck, consuming ${formatPipelineTime(bottleneck.timing.duration)} (${bottleneckPercent.toFixed(1)}%) of total request execution time. Microsecond-scale stages executed near-instantaneously without CPU blocking.`;
+      document.getElementById('ft-bottleneck').textContent = `${bottleneck.name} · ${bottleneckPercent.toFixed(1)}%`;
+
+      updateTimelineScale(total);
+      stages.forEach(stage => updateStageTrack(`bar-${stage.key}`, `tl-time-${stage.key}`, stage.timing.start - request.start, stage.timing.duration, total, stage));
+      renderTimelineAnalysis(stages, request.start, total, bottleneck.key);
+    }
+
+    function formatPipelineTime(seconds) {
+      return seconds >= .001 ? `${(seconds * 1000).toFixed(3)} ms` : `${(seconds * 1e6).toFixed(1)} µs`;
+    }
+
+    function renderTimelineAnalysis(stages, baseTime, total, bottleneckKey) {
+      const container = document.getElementById('timeline-stage-analysis');
+      container.replaceChildren();
+      stages.forEach((stage, idx) => {
+        const isBottleneck = stage.key === bottleneckKey;
+        const card = document.createElement('div');
+        card.className = `stage-card ${isBottleneck ? 'bottleneck' : ''}`;
+        card.title = `${stage.name}: start ${formatPipelineTime(stage.timing.start - baseTime)}, end ${formatPipelineTime(stage.timing.start + stage.timing.duration - baseTime)}, duration ${formatPipelineTime(stage.timing.duration)}.`;
+
+        const header = document.createElement('div');
+        header.className = 'stage-card-header';
+        const title = document.createElement('span');
+        title.className = 'stage-card-title';
+        title.textContent = `0${idx + 1}. ${stage.name}`;
+
+        const tag = document.createElement('span');
+        const rawShare = stage.timing.duration / total * 100;
+        if (isBottleneck) {
+          tag.className = 'stage-card-tag bottleneck';
+          tag.textContent = 'BOTTLENECK';
+        } else if (rawShare < 1.0) {
+          tag.className = 'stage-card-tag';
+          tag.textContent = 'MICROSECOND';
+        } else {
+          tag.className = 'stage-card-tag';
+          tag.textContent = 'COMPLETED';
+        }
+        header.append(title, tag);
+
+        const data = document.createElement('div');
+        data.className = 'stage-card-data';
+        const rows = [
+          ['Start', formatPipelineTime(stage.timing.start - baseTime)],
+          ['End', formatPipelineTime(stage.timing.start + stage.timing.duration - baseTime)],
+          ['Duration', formatPipelineTime(stage.timing.duration)],
+          ['Share', rawShare < 0.01 ? '< 0.01%' : `${rawShare.toFixed(2)}%`]
+        ];
+        rows.forEach(([label, value]) => {
+          const left = document.createElement('span'); left.textContent = label;
+          const right = document.createElement('strong'); right.textContent = value;
+          data.append(left, right);
+        });
+
+        const desc = document.createElement('div');
+        desc.className = 'stage-card-desc';
+        desc.textContent = STAGE_DESCRIPTIONS[stage.key] || 'Pipeline execution stage.';
+
+        card.append(header, data, desc);
+        container.appendChild(card);
+      });
+    }
+
+    function updateTimelineScale(total) {
+      const scale = document.getElementById('timeline-scale');
+      scale.replaceChildren();
+      const targetTicks = Math.max(4, Math.min(8, Math.floor(scale.clientWidth / 115)) || 5);
+      scale.style.backgroundSize = `${100 / targetTicks}% 100%`;
+      for (let index = 0; index <= targetTicks; index++) {
+        const tick = document.createElement('span');
+        tick.style.left = `${index / targetTicks * 100}%`;
+        tick.textContent = `${(total * 1e6 * index / targetTicks).toFixed(index === 0 ? 0 : 1)} µs`;
+        scale.appendChild(tick);
+      }
+    }
+
+    function updateStageTrack(barId, timeId, offset, duration, total, stage) {
+      const leftPct = Math.max(0, Math.min(99, (offset / total) * 100));
+      const rawWidthPct = (duration / total) * 100;
+      /* Enforce minimum 1.5% visual bar width so microsecond-scale stages remain clearly visible & interactive */
+      const visualWidthPct = Math.max(1.5, Math.min(100 - leftPct, rawWidthPct));
+
+      const bar = document.getElementById(barId);
+      bar.style.left = `${leftPct.toFixed(3)}%`;
+      bar.style.width = `${visualWidthPct.toFixed(3)}%`;
+
+      const durationText = formatPipelineTime(duration);
+      const percentText = rawWidthPct < 0.01 ? '< 0.01%' : `${rawWidthPct.toFixed(2)}%`;
+      const isMicro = rawWidthPct < 1.0;
+
+      if (isMicro) {
+        bar.classList.add('microsecond-stage');
+      } else {
+        bar.classList.remove('microsecond-stage');
+      }
+
+      document.getElementById(timeId).innerHTML = `${durationText} &nbsp;&middot;&nbsp; ${percentText}${isMicro ? ' <span class="track-micro-tag">(microsecond stage)</span>' : ''}`;
+      bar.title = `${stage.name}\nMeasured Duration: ${durationText} (${percentText} of total request)\nStart Offset: ${formatPipelineTime(offset)} into request\n${isMicro ? 'Note: Visual bar rendered with minimum width for clarity.' : ''}`;
+    }
+
+    function downloadBlob(filename, type, content) {
+      const blob = new Blob([content], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = filename; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    function csvCell(value) {
+      return `"${String(value ?? '').replaceAll('"', '""')}"`;
+    }
+
+    document.getElementById('export-json').addEventListener('click', () => {
+      if (!latestTelemetry) return;
+      downloadBlob('jitterentropy-telemetry.json', 'application/json', JSON.stringify(frozenTelemetry || latestTelemetry, null, 2));
+    });
+
+    document.getElementById('export-csv').addEventListener('click', () => {
+      if (!latestTelemetry) return;
+      const data = frozenTelemetry || latestTelemetry;
+      const rows = [['record_type', 'index_or_stage', 'timestamp_seconds', 'bytes', 'duration_seconds', 'throughput_mb_s', 'start_seconds', 'end_seconds', 'percent_total']];
+      const history = data.history || {};
+      const count = Math.min(history.count || 0, (history.timestamps || []).length, (history.bytes || []).length, (history.durations || []).length);
+      for (let index = 0; index < count; index++) {
+        const duration = history.durations[index];
+        rows.push(['generation', index, history.timestamps[index], history.bytes[index], duration, duration > 0 ? (history.bytes[index] / (1024 * 1024)) / duration : 0, '', '', '']);
+      }
+      if (data.timeline) {
+        const timeline = data.timeline;
+        const base = timeline.request.start;
+        const total = Math.max((timeline.serialization.start + timeline.serialization.duration) - base, .000001);
+        [['request', timeline.request], ['entropy', timeline.entropy], ['processing', timeline.processing], ['serialization', timeline.serialization]].forEach(([name, stage]) => {
+          rows.push(['pipeline', name, '', '', stage.duration, '', stage.start, stage.start + stage.duration, stage.duration / total * 100]);
+        });
+      }
+      downloadBlob('jitterentropy-analysis.csv', 'text/csv;charset=utf-8', rows.map(row => row.map(csvCell).join(',')).join('\n'));
+    });
+
+    function timelinePngCanvas(data) {
+      const canvas = document.createElement('canvas'); canvas.width = 1400; canvas.height = 440;
+      const ctx = canvas.getContext('2d'); ctx.fillStyle = '#10161c'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#e6ebef'; ctx.font = '600 24px Segoe UI'; ctx.fillText('Jitterentropy timing analysis', 42, 46);
+      const timeline = data.timeline;
+      if (!timeline) { ctx.fillStyle = '#9ba8b5'; ctx.font = '18px Segoe UI'; ctx.fillText('No measured pipeline available.', 42, 90); return canvas; }
+      const base = timeline.request.start, total = Math.max((timeline.serialization.start + timeline.serialization.duration) - base, .000001);
+      const stages = [['Request dispatch', timeline.request, '#52b9d4'], ['Entropy collection', timeline.entropy, '#63ba88'], ['Result processing', timeline.processing, '#d8a85a'], ['Telemetry serialization', timeline.serialization, '#8797a5']];
+      stages.forEach(([name, stage, color], index) => {
+        const y = 95 + index * 72, left = 295 + (stage.start - base) / total * 1040, width = Math.max(4, stage.duration / total * 1040);
+        ctx.fillStyle = '#9ba8b5'; ctx.font = '15px Cascadia Mono'; ctx.fillText(name, 42, y + 21);
+        ctx.fillStyle = '#1d2631'; ctx.fillRect(295, y, 1040, 34);
+        ctx.fillStyle = color; ctx.fillRect(left, y + 8, width, 18);
+        ctx.fillStyle = '#d7e0e5'; ctx.font = '13px Cascadia Mono'; ctx.fillText(`${formatPipelineTime(stage.duration)} · ${(stage.duration / total * 100).toFixed(2)}%`, 295, y + 56);
+      });
+      return canvas;
+    }
+
+    document.getElementById('export-png').addEventListener('click', () => {
+      if (!latestTelemetry) return;
+      const source = currentTab === 'timeline' ? timelinePngCanvas(frozenTelemetry || latestTelemetry) : document.getElementById(currentTab === 'oscilloscope' ? 'canvas-oscilloscope' : 'canvas-performance');
+      source.toBlob(blob => { if (blob) downloadBlob(`jitterentropy-${currentTab}.png`, 'image/png', blob); }, 'image/png');
+    });
+
+    document.getElementById('copy-metrics').addEventListener('click', async () => {
+      const text = [
+        `RNG state: ${document.getElementById('ft-init').textContent}`,
+        `Worker state: ${document.getElementById('ft-busy').textContent}`,
+        `Throughput: ${document.getElementById('ft-throughput').textContent}`,
+        `Jitter diagnostics: ${document.getElementById('ft-jitter').textContent}`,
+        `Pipeline bottleneck: ${document.getElementById('ft-bottleneck').textContent}`,
+        `Last error: ${document.getElementById('ft-error').textContent}`
+      ].join('\n');
+      try { await navigator.clipboard.writeText(text); }
+      catch { const area = document.createElement('textarea'); area.value = text; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
+    });
+
+    document.querySelectorAll('.metric:not([title])').forEach(metric => {
+      metric.title = 'Measured or derived diagnostic. Refer to the metric label for units; values originate from the current telemetry snapshot.';
+    });
+  </script>
+</body>
+</html>

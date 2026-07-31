@@ -1,0 +1,636 @@
+/* Jitter RNG: Noise Sources
+ *
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
+ *
+ * License: see LICENSE file in root directory
+ *
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED
+ * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, ALL OF
+ * WHICH ARE HEREBY DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT
+ * OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+ * USE OF THIS SOFTWARE, EVEN IF NOT ADVISED OF THE POSSIBILITY OF SUCH
+ * DAMAGE.
+ */
+
+#include "jitterentropy-noise.h"
+#include "jitterentropy-health.h"
+#include "jitterentropy-timer.h"
+#include "jitterentropy-sha3.h"
+
+/***************************************************************************
+ * Noise sources
+ ***************************************************************************/
+
+/*
+ * Structure of the intermediary buffer:
+ *
+ * | time delta | domain separator | hash loop hash | 0 ... |
+ *
+ * Note, this buffer is truncted to the current rate size which implies that
+ * data with entropy must be placed at a location to guarantee they are not
+ * truncated off.
+ */
+#define JENT_SIZEOF_TIMEDELTA		(sizeof(uint64_t))
+#define JENT_SIZEOF_DOMAINSEPARATOR	(sizeof(uint8_t))
+#define JENT_SIZEOF_HASH_BLOCK		(JENT_SHA3_256_SIZE_DIGEST)
+#define JENT_SIZEOF_INTERMEDIARY_DATA	(JENT_SIZEOF_TIMEDELTA +               \
+					 JENT_SIZEOF_DOMAINSEPARATOR +         \
+					 JENT_SIZEOF_HASH_BLOCK)
+
+/* Intemediary is as big as the maximum rate it will be read with */
+#define JENT_SIZEOF_INTERMEDIARY	(JENT_SHA3_256_SIZE_BLOCK)
+
+#define JENT_OFFSET_TIMEDELTA		(0)
+#define JENT_OFFSET_DOMAINSEPARATOR                                            \
+	(JENT_OFFSET_TIMEDELTA + JENT_SIZEOF_TIMEDELTA)
+#define JENT_OFFSET_HASH_BLOCK                                                 \
+	(JENT_OFFSET_DOMAINSEPARATOR + JENT_SIZEOF_DOMAINSEPARATOR)
+
+/**
+ * Insert a data block into the entropy pool
+ *
+ * The function inserts the intermediary buffer and the time delta together
+ * into the entropy pool. The intermediary buffer is of exact the SHA3-256 rate
+ * size to ensure that always one Keccak operation is triggered.
+ *
+ * Note, this function also clears the intermediary buffer immediately after it
+ * was injected into the entropy pool.
+ *
+ * @param[in] ec Reference to entropy collector
+ * @param[in] time_delta the time delta raw entropy value
+ * @param[in] intermediary buffer that may hold other data
+ */
+static void jent_hash_insert(struct rand_data *ec, uint64_t time_delta,
+			     uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY])
+{
+	/*
+	 * Insert the time stamp into the intermediary buffer after the message
+	 * digest of the intermediate data.
+	 */
+	memcpy(intermediary + JENT_OFFSET_TIMEDELTA,
+	       (uint8_t *)&time_delta, sizeof(uint64_t));
+
+	BUILD_BUG_ON(JENT_SIZEOF_INTERMEDIARY < JENT_SIZEOF_INTERMEDIARY_DATA);
+
+	/*
+	 * Inject the data from the intermediary buffer, including the hash we
+	 * are using for timing, and the time stamp. Only the time is considered
+	 * to contain any entropy. The intermediary buffer is exactly rate-size
+	 * to always cause a Keccak operation.
+	 *
+	 * This operation seeds the XDRBG conditioning component as follows:
+	 *
+	 * XDRBG reseed:
+	 * V ← XOF( encode(( V' || seed ), α, 1), |V| )
+	 *
+	 * where
+	 *
+	 * seed ← (intermediary_0 || intermediary_1 || ... ||
+	 *	   intermediary_[(osr + safety_factor)*256])
+	 */
+	jent_sha3_update(ec->hash_state, intermediary,
+			 jent_sha3_rate(ec->hash_state));
+	jent_memset_secure(intermediary, JENT_SIZEOF_INTERMEDIARY);
+}
+
+/**
+ * Hash loop noise source -- this is the noise source based on the CPU
+ * 			     execution time jitter
+ *
+ * @param[in] ec entropy collector struct
+ * @param[in] intermediary intermediary to be filled with the hash loop result
+ *			   whose structure is defined above.
+ * @param[in] loop_cnt if a value not equal to 0 is set, use the given value as
+ *		       number of loops to perform the hash operation
+ */
+static void jent_hash_loop(struct rand_data *ec,
+			   uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY],
+			   uint64_t loop_cnt)
+{
+	HASH_CTX_ON_STACK(ctx);
+	uint8_t *digest = intermediary + JENT_OFFSET_HASH_BLOCK;
+	uint64_t j = 0;
+
+	/*
+	 * allow caller to set the counter
+	 */
+	uint64_t hash_loop_cnt = loop_cnt ? loop_cnt : ec->hashloopcnt;
+
+	BUILD_BUG_ON(JENT_HASH_LOOP_DEFAULT < 1);
+	BUILD_BUG_ON(JENT_HASH_LOOP_INIT < 1);
+
+	jent_sha3_256_init(&ctx);
+
+	/*
+	 * This loop fills a buffer which is injected into the entropy pool.
+	 * The main reason for this loop is to execute something over which we
+	 * can perform a timing measurement. The injection of the resulting
+	 * data into the pool is performed to ensure the result is used and
+	 * the compiler cannot optimize the loop away in case the result is not
+	 * used at all. Yet that data is considered "additional information"
+	 * considering the terminology from SP800-90A without any entropy.
+	 *
+	 * Note, it does not matter which or how much data you inject, we are
+	 * interested in one Keccack1600 compression operation performed with
+	 * the sha3_final.
+	 */
+	for (j = 0; j < hash_loop_cnt; j++) {
+		/* Limit data size to prevent Keccak operation during update */
+		jent_sha3_update(&ctx, digest, JENT_SHA3_256_SIZE_DIGEST);
+		jent_sha3_update(&ctx, (uint8_t *)&ec->rct_count,
+				 sizeof(ec->rct_count));
+		jent_sha3_update(&ctx, (uint8_t *)&ec->apt_cutoff,
+				 sizeof(ec->apt_cutoff));
+		jent_sha3_update(&ctx, (uint8_t *)&ec->apt_observations,
+				 sizeof(ec->apt_observations));
+		jent_sha3_update(&ctx, (uint8_t *)&ec->apt_count,
+				 sizeof(ec->apt_count));
+		jent_sha3_update(&ctx,(uint8_t *) &ec->apt_base,
+				 sizeof(ec->apt_base));
+		jent_sha3_update(&ctx,(uint8_t *) &ec->rct_mem_count,
+				 sizeof(ec->rct_mem_count));
+		jent_sha3_update(&ctx, (uint8_t *)&j, sizeof(uint64_t));
+		jent_sha3_final(&ctx, digest);
+	}
+
+	jent_memset_secure(&ctx, JENT_SHA_MAX_CTX_SIZE);
+}
+
+static inline uint32_t uint32rotl(const uint32_t x, int k)
+{
+	return (x << k) | (x >> (32 - k));
+}
+
+static inline uint32_t xoshiro128starstar(uint32_t *s)
+{
+	const uint32_t result = uint32rotl(s[1] * 5, 7) * 9;
+	const uint32_t t = s[1] << 9;
+
+	s[2] ^= s[0];
+	s[3] ^= s[1];
+	s[1] ^= s[2];
+	s[0] ^= s[3];
+
+	s[2] ^= t;
+
+	s[3] = uint32rotl(s[3], 11);
+
+	return result;
+}
+
+/**
+ * Memory access noise source -- this is the noise source based on the memory
+ *				 access time jitter
+ *
+ * @param[in] ec entropy collector struct
+ * @param[in] loop_cnt if a value not equal to 0 is set, use the given value as
+ *		       number of loops to perform the memory access operation
+ * @param[in] current_delta If non-NULL, return the execution duration of the
+ *			    the memory access operation. This is used during
+ *			    the NTG.1 startup process where the memory access
+ *			    and hash loop are handled separately.
+ */
+static void jent_memaccess_pseudorandom(struct rand_data *ec, uint64_t loop_cnt,
+					uint64_t *current_delta)
+{
+	uint64_t i = 0, time_now_start = 0, time_now_end = 0, tmp_delta = 0;
+	union {
+		uint32_t u[4];
+		uint8_t b[sizeof(uint32_t) * 4];
+	} prngState = { .u = {0x8e93eec0, 0xce65608a, 0xa8d46b46, 0xe83cef69} };
+	uint32_t addressMask;
+
+	uint64_t mem_loop_cnt;
+
+	if (NULL == ec || NULL == ec->mem)
+		return;
+
+	/* allow caller to set the counter */
+	mem_loop_cnt = loop_cnt ? loop_cnt : ec->memaccessloops;
+	addressMask = ec->memmask;
+
+	/*
+	 * Mix the current data into prngState
+	 *
+	 * Any time you see a PRNG in a noise source, you should be concerned.
+	 *
+	 * The PRNG doesn’t directly produce the raw noise, it just adjusts the
+	 * location being updated. The timing of the update is part of the raw
+	 * sample. The main thing this process gets you isn’t better
+	 * “per-update” timing, it gets you mostly independent “per-update”
+	 * timing, so we can now benefit from the Central Limit Theorem!
+	 */
+	for (i = 0; i < sizeof(prngState); i++) {
+		jent_get_nstime_internal(ec, &time_now_start);
+		prngState.b[i] ^= (uint8_t)(time_now_start & 0xff);
+	}
+
+	/*
+	 * Obtain the start time of the timing measurement when requested by
+	 * the caller.
+	 */
+	if (current_delta)
+		jent_get_nstime_internal(ec, &time_now_start);
+
+	for (i = 0; i < mem_loop_cnt; i++) {
+		/* Take PRNG output to find the memory location to update. */
+		unsigned char *tmpval = ec->mem +
+					(xoshiro128starstar(prngState.u) &
+					 addressMask);
+
+		/*
+		 * memory access: just add 1 to one byte,
+		 * wrap at 255 -- memory access implies read
+		 * from and write to memory location
+		 */
+		*tmpval = (unsigned char)((*tmpval + 1) & 0xff);
+	}
+
+	/*
+	 * Calculate the execution time by measuring the end time and obtain
+	 * the time delta.
+	 */
+	if (current_delta) {
+		jent_get_nstime_internal(ec, &time_now_end);
+		tmp_delta += jent_delta(time_now_start, time_now_end) /
+					ec->jent_common_timer_gcd;
+		*current_delta = tmp_delta;
+	}
+}
+
+/**
+ * Memory Access noise source -- this is a noise source based on variations in
+ * 				 memory access times
+ *
+ * This function performs memory accesses which will add to the timing
+ * variations due to an unknown amount of CPU wait states that need to be
+ * added when accessing memory. The memory size should be larger than the L1
+ * caches as outlined in the documentation and the associated testing.
+ *
+ * The L1 cache has a very high bandwidth, albeit its access rate is  usually
+ * slower than accessing CPU registers. Therefore, L1 accesses only add minimal
+ * variations as the CPU has hardly to wait. Starting with L2, significant
+ * variations are added because L2 typically does not belong to the CPU any more
+ * and therefore a wider range of CPU wait states is necessary for accesses.
+ * L3 and real memory accesses have even a wider range of wait states. However,
+ * to reliably access either L3 or memory, the ec->mem memory must be quite
+ * large which is usually not desirable.
+ *
+ * @param[in] ec Reference to the entropy collector with the memory access data.
+ *		 If the reference to the memory block to be accessed is NULL,
+ *		 this noise source is disabled
+ * @param[in] loop_cnt if a value not equal to 0 is set, use the given value as
+ *		       number of loops to perform the memory access operation
+ * @param[in] current_delta If non-NULL, return the execution duration of the
+ *			    the memory access operation. This is used during
+ *			    the NTG.1 startup process where the memory access
+ *			    and hash loop are handled separately.
+ */
+static void jent_memaccess_deterministic(struct rand_data *ec,
+					 uint64_t loop_cnt,
+					 uint64_t *current_delta)
+{
+	uint64_t time_now_start = 0, time_now_end = 0, tmp_delta = 0;
+	unsigned int wrap = 0;
+	uint64_t i = 0;
+
+	uint64_t mem_loop_cnt;
+
+	if (NULL == ec || NULL == ec->mem)
+		return;
+
+	/* allow caller to set the counter */
+	mem_loop_cnt = loop_cnt ? loop_cnt : ec->memaccessloops;
+	wrap = ec->memmask + 1;
+
+        if (current_delta)
+		jent_get_nstime_internal(ec, &time_now_start);
+
+	for (i = 0; i < mem_loop_cnt; i++) {
+		unsigned char *tmpval = ec->mem + ec->memlocation;
+
+		/*
+		 * memory access: just add 1 to one byte,
+		 * wrap at 255 -- memory access implies read
+		 * from and write to memory location
+		 */
+		*tmpval = (unsigned char)((*tmpval + 1) & 0xff);
+
+		/*
+		 * Addition of memblocksize - 1 to pointer
+		 * with wrap around logic to ensure that every
+		 * memory location is hit evenly
+		 */
+		ec->memlocation = ec->memlocation + JENT_MEMORY_BLOCKSIZE - 1;
+		ec->memlocation = ec->memlocation % wrap;
+	}
+
+	if (current_delta) {
+		jent_get_nstime_internal(ec, &time_now_end);
+		tmp_delta += jent_delta(time_now_start, time_now_end) /
+					ec->jent_common_timer_gcd;
+		*current_delta = tmp_delta;
+	}
+}
+
+/***************************************************************************
+ * Start of entropy processing logic
+ ***************************************************************************/
+/**
+ * This is the heart of the entropy generation for NTG.1 startup, invoking only
+ * the memory access noise source: calculate time deltas and use the CPU jitter
+ * in the time deltas. The jitter is injected into the entropy pool.
+ *
+ * @param[in] ec Reference to entropy collector
+ * @param[in] loop_cnt see jent_hash_time
+ * @param[out] ret_current_delta Test interface: return time delta - may be NULL
+ *
+ * @return: result of stuck test
+ */
+unsigned int jent_measure_jitter_ntg1_memaccess(struct rand_data *ec,
+						uint64_t loop_cnt,
+						uint64_t *ret_current_delta)
+{
+	uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY] = { 0 };
+	uint64_t current_delta = 0;
+	unsigned int stuck;
+
+	/*
+	 * Now call the memory noise source with tripple the default iteration
+	 * count considering this is the only noise source.
+	 *
+	 * The call returns the execution time delta.
+	 *
+	 * For the NTG.1 discussion, the following is of interest. NTG.1
+	 * mandates that 2 separate noise sources are used. The hash loop
+	 * operation uses the variations from the CPU instructions and the L1
+	 * cache data. The memory access loop here shall deliver variations from
+	 * the L2, L3 caches or RAM. To ensure that as little as possible L1
+	 * operations are present, the xoshiro128starstar operation is not used.
+	 * The deterministic operation has less instructions and less L1
+	 * accesses. Therefore, the deterministic operation only is used here.
+	 *
+	 * Furthermore, the increase of the memory access loop by 3 (the value
+	 * below is added to the original memory access loop) to ensure that
+	 * sufficient variations from L2 are collected to meet the NTG.1
+	 * requirement of at least 240 bits of entropy from the L2/L3/RAM
+	 * accesses.
+	 */
+	jent_memaccess_deterministic(
+		ec, loop_cnt ? loop_cnt :
+			       ec->memaccessloops * JENT_MEM_ACC_LOOP_INIT,
+		&current_delta);
+
+	/*
+	 * Check whether we have a stuck measurement - and apply the health
+	 * tests.
+	 */
+	stuck = jent_stuck(ec, current_delta);
+
+	/* Domain separation */
+	intermediary[JENT_OFFSET_DOMAINSEPARATOR] = 0x01;
+
+	/* Insert the data into the entropy pool */
+	jent_hash_insert(ec, current_delta, intermediary);
+
+	/* return the raw entropy value */
+	if (ret_current_delta)
+		*ret_current_delta = current_delta;
+
+	return stuck;
+}
+
+/**
+ * This is the heart of the entropy generation for NTG.1 startup, invoking only
+ * the hash loop noise source: calculate time deltas and use the CPU jitter in
+ * the time deltas. The jitter is injected into the entropy pool.
+ *
+ * @param[in] ec Reference to entropy collector
+ * @param[in] loop_cnt see jent_hash_loop
+ * @param[out] ret_current_delta Test interface: return time delta - may be NULL
+ *
+ * @return: result of stuck test
+ */
+unsigned int jent_measure_jitter_ntg1_sha3(struct rand_data *ec,
+					   uint64_t loop_cnt,
+					   uint64_t *ret_current_delta)
+{
+	uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY] = { 0 };
+	uint64_t time_now = 0;
+	uint64_t current_delta = 0;
+	unsigned int stuck;
+
+	/*
+	 * Get time stamp to only measure the execution time of the hash loop
+	 * to make this part an independent entropy source (even excluding the
+	 * SHA3 update to insert the data into the entropy pool).
+	 */
+	jent_get_nstime_internal(ec, &ec->prev_time);
+
+	/*
+	 * Now call the hash noise source with tripple the default iteration
+	 * count considering this is the only noise source.
+	 *
+	 * Place the digest at an offset allowing the time stamp and the
+	 * domain separator to be added before.
+	 */
+	jent_hash_loop(ec, intermediary,
+		       loop_cnt ? loop_cnt :
+				  ec->hashloopcnt * JENT_HASH_LOOP_INIT);
+
+	/*
+	 * Get time stamp and calculate time delta to previous
+	 * invocation to measure the timing variations
+	 */
+	jent_get_nstime_internal(ec, &time_now);
+	current_delta = jent_delta(ec->prev_time, time_now) /
+				   ec->jent_common_timer_gcd;
+
+	/*
+	 * Check whether we have a stuck measurement - and apply the health
+	 * tests.
+	 */
+	stuck = jent_stuck(ec, current_delta);
+
+	/* Domain separation */
+	intermediary[JENT_OFFSET_DOMAINSEPARATOR] = 0x02;
+
+	/* Insert the data into the entropy pool */
+	jent_hash_insert(ec, current_delta, intermediary);
+
+	/* return the raw entropy value */
+	if (ret_current_delta)
+		*ret_current_delta = current_delta;
+
+	return stuck;
+}
+
+/**
+ * This is the heart of the entropy generation: calculate time deltas and
+ * use the CPU jitter in the time deltas. The jitter is injected into the
+ * entropy pool.
+ *
+ * WARNING: ensure that ->prev_time is primed before using the output
+ * 	    of this function! This can be done by calling this function
+ * 	    and not using its result.
+ *
+ * @param[in] ec Reference to entropy collector
+ * @param[in] loop_cnt see jent_hash_loop
+ * @param[out] ret_current_delta Test interface: return time delta - may be NULL
+ *
+ * @return: result of stuck test
+ */
+unsigned int jent_measure_jitter(struct rand_data *ec,
+				 uint64_t loop_cnt,
+				 uint64_t *ret_current_delta)
+{
+	/* Size of intermediary ensures a Keccak operation during hash_update */
+	uint8_t intermediary[JENT_SIZEOF_INTERMEDIARY] = { 0 };
+
+	uint64_t time_now = 0;
+	uint64_t current_delta = 0;
+	unsigned int stuck;
+
+	/* Invoke memory access loop noise source */
+#ifdef JENT_RANDOM_MEMACCESS
+	jent_memaccess_pseudorandom(ec, loop_cnt, NULL);
+#else
+	jent_memaccess_deterministic(ec, loop_cnt, NULL);
+#endif
+
+	/*
+	 * Get time stamp and calculate time delta to previous
+	 * invocation to measure the timing variations
+	 */
+	jent_get_nstime_internal(ec, &time_now);
+	current_delta = jent_delta(ec->prev_time, time_now) /
+				   ec->jent_common_timer_gcd;
+	ec->prev_time = time_now;
+
+	/* Check whether we have a stuck measurement. */
+	stuck = jent_stuck(ec, current_delta);
+
+	/* Invoke hash loop noise source */
+	jent_hash_loop(ec, intermediary, loop_cnt);
+
+	/* Domain separation */
+	intermediary[JENT_OFFSET_DOMAINSEPARATOR] = 0x03;
+
+	/* Insert the data into the entropy pool */
+	jent_hash_insert(ec, current_delta, intermediary);
+
+	/* return the raw entropy value */
+	if (ret_current_delta)
+		*ret_current_delta = current_delta;
+
+	return stuck;
+}
+
+/*
+ * We multiply the loop value with ->osr to obtain the oversampling rate
+ * requested by the caller
+ */
+#define JENT_MEASURE_JITTER_LOOP_CTR(_osr, _safety_factor)                     \
+	((DATA_SIZE_BITS + (_safety_factor)) * (_osr))
+
+/*
+ * The health test RCT with memory operates on multiples of three time deltas.
+ * Therefore, round up the jitter loop counter to the nearest multiple of three.
+ */
+#define JENT_ROUNDUP_TO_THREE(x)                                               \
+	( (((x) + 2) / 3) * 3 )
+#define JENT_ADJUSTED_MEASURE_JITTER_LOOP_CTR(_osr, _safety_factor)            \
+	JENT_ROUNDUP_TO_THREE(                                                 \
+		JENT_MEASURE_JITTER_LOOP_CTR(_osr, _safety_factor))
+
+static void jent_random_data_one(
+	struct rand_data *ec,
+	unsigned int (*measure_jitter)(struct rand_data *ec,
+			               uint64_t loop_cnt,
+				       uint64_t *ret_current_delta))
+{
+	unsigned int safety_factor = 0, ctr = 0;
+
+	if (ec->is_fips_enabled)
+		safety_factor = ENTROPY_SAFETY_FACTOR;
+
+	/* RCT with memory: start a new iteration loop */
+	ec->rct_mem_ctr = 0;
+
+	/* Obtain number of loop iterations */
+	ec->rct_mem_nosr = (unsigned short)
+		JENT_ADJUSTED_MEASURE_JITTER_LOOP_CTR(ec->osr, safety_factor);
+
+	/* Safety measure against wrapping */
+	if (ec->rct_mem_nosr < DATA_SIZE_BITS) {
+		ec->health_failure |= JENT_RCT_MEM_FAILURE_PERMANENT;
+		return;
+	}
+
+	/* Entropy collection loop */
+	while (!jent_health_failure(ec)) {
+		/* If a stuck measurement is received, repeat measurement */
+		if (measure_jitter(ec, 0, NULL))
+			continue;
+
+		if (++ctr >= ec->rct_mem_nosr)
+			break;
+	}
+}
+
+/**
+ * Generator of one 256 bit random number
+ * Function fills rand_data->hash_state
+ *
+ * @param[in] ec Reference to entropy collector
+ */
+void jent_random_data(struct rand_data *ec)
+{
+	/*
+	 * Select which noise source to use for the entropy collection
+	 */
+	switch (ec->startup_state) {
+	case jent_startup_memory:
+		jent_random_data_one(ec, jent_measure_jitter_ntg1_memaccess);
+		ec->startup_state--;
+
+		/*
+		 * Initialize the health tests as we fall through to
+		 * independently invoke the next noise source.
+		 */
+		jent_health_init(ec, ec->flags & JENT_NTG1 ?
+				     jent_health_init_type_ntg1 :
+				     jent_health_init_type_common);
+
+		fallthrough;
+	case jent_startup_sha3:
+		jent_random_data_one(ec, jent_measure_jitter_ntg1_sha3);
+		ec->startup_state--;
+
+		/*
+		 * Initialize the health tests as we fall through to
+		 * independently invoke the next noise source.
+		 */
+		jent_health_init(ec, ec->flags & JENT_NTG1 ?
+				     jent_health_init_type_ntg1 :
+				     jent_health_init_type_common);
+
+		break;
+	case jent_startup_completed:
+	default:
+		/* priming of the ->prev_time value */
+		jent_measure_jitter(ec, 0, NULL);
+		jent_random_data_one(ec, jent_measure_jitter);
+	}
+}
+
+void jent_read_random_block(struct rand_data *ec, char *dst, size_t dst_len)
+{
+	jent_drbg_generate_block(ec->hash_state, (uint8_t*)dst, dst_len);
+}
