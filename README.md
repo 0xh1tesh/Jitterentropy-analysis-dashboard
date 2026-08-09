@@ -132,15 +132,19 @@ entr_proj/
 
 ## Screenshots
 ### Oscilloscope View
-<img width="1907" height="1050" alt="ossci" src="https://github.com/user-attachments/assets/74af1240-8b9d-4917-aabd-dbade41eef44" />
+<img width="1892" height="1042" alt="Screenshot 2026-08-09 153944" src="https://github.com/user-attachments/assets/e3254569-77b8-4a32-b8ee-7af93cdf30bc" />
+
 
 
 ### Performance Dashboard
-<img width="1911" height="1047" alt="Screenshot 2026-07-31 151125" src="https://github.com/user-attachments/assets/d938d937-493f-400b-9acd-6a43e0426428" />
+<img width="1892" height="1043" alt="Screenshot 2026-08-09 153958" src="https://github.com/user-attachments/assets/2757feea-509a-44e7-b794-adcd7b247888" />
+
+
 
 
 ### Timeline Analysis
-<img width="1917" height="1105" alt="Screenshot 2026-07-31 151143" src="https://github.com/user-attachments/assets/5174d20e-67c1-48a2-b25e-f0eab20ce91f" />
+<img width="1915" height="1105" alt="Screenshot 2026-08-09 154022" src="https://github.com/user-attachments/assets/a9b47295-0904-41b9-839c-bd238da46b78" />
+
 
 
 
