@@ -25,6 +25,7 @@ void health_monitor_record_generation_attempt(bool success,
 					      int error_code);
 void health_monitor_snapshot(rng_health_stats *stats);
 void health_monitor_print_report(FILE *stream);
+void health_monitor_clear_history(void);
 
 /*
  * Additive snapshot function: Copies up to max_count most-recent samples from the

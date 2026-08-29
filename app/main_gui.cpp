@@ -526,6 +526,10 @@ public:
 			 json_str.find("\"action\": \"cancelBenchmark\"") != std::string::npos) {
 			InterlockedExchange(&benchmark_cancel_requested, 1);
 		}
+		else if (json_str.find("\"action\":\"clearHistory\"") != std::string::npos ||
+			 json_str.find("\"action\": \"clearHistory\"") != std::string::npos) {
+			health_monitor_clear_history();
+		}
 
 		return S_OK;
 	}

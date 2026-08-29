@@ -685,6 +685,7 @@
           <button class="export-action" id="export-csv" title="Export available history and pipeline data as CSV.">Export CSV</button>
           <button class="export-action" id="export-png" title="Export the current graph or timing diagram as PNG.">Export PNG</button>
           <button class="export-action" id="copy-metrics" title="Copy current measured and derived diagnostics.">Copy metrics</button>
+          <button class="export-action" id="clear-history" title="Clear the performance history ring buffer.">Clear Data</button>
         </div>
       </div>
     </header>
@@ -814,7 +815,7 @@
       <div class="footer-metric"><span class="footer-label">Last error</span><span class="footer-value" id="ft-error">0 (OK)</span></div>
       <div class="footer-metric" title="Jitter range and standard deviation from the current capture."><span class="footer-label">Jitter diagnostics</span><span class="footer-value" id="ft-jitter">No samples</span></div>
       <div class="footer-metric" title="Longest measured pipeline stage."><span class="footer-label">Pipeline bottleneck</span><span class="footer-value" id="ft-bottleneck">No capture</span></div>
-      <div class="footer-metric"><span class="footer-label">Hex sample preview</span><span class="footer-value hex-value" id="ft-hex">No sample generated</span></div>
+      <div class="footer-metric" id="ft-hex-container" style="cursor: pointer;" title="Click to copy hex sample"><span class="footer-label">Hex sample preview <span id="ft-hex-copy-indicator" style="opacity: 0; transition: opacity 0.2s; color: var(--green); font-weight: normal; text-transform: none;">(Copied!)</span></span><span class="footer-value hex-value" id="ft-hex">No sample generated</span></div>
     </footer>
   </div>
 
@@ -1323,6 +1324,20 @@
       ].join('\n');
       try { await navigator.clipboard.writeText(text); }
       catch { const area = document.createElement('textarea'); area.value = text; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
+    });
+
+    document.getElementById('clear-history').addEventListener('click', () => {
+      window.chrome.webview.postMessage({ action: 'clearHistory' });
+    });
+
+    document.getElementById('ft-hex-container').addEventListener('click', async () => {
+      const hexValue = document.getElementById('ft-hex').textContent;
+      if (hexValue === 'No sample generated') return;
+      try { await navigator.clipboard.writeText(hexValue); }
+      catch { const area = document.createElement('textarea'); area.value = hexValue; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
+      const ind = document.getElementById('ft-hex-copy-indicator');
+      ind.style.opacity = 1;
+      setTimeout(() => ind.style.opacity = 0, 1500);
     });
 
     document.querySelectorAll('.metric:not([title])').forEach(metric => {

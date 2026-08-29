@@ -225,3 +225,12 @@ void health_monitor_print_report(FILE *stream)
 	fprintf(stream, "  throughput: %.2f bytes/s\n",
 		stats.throughput_bytes_per_second);
 }
+
+void health_monitor_clear_history(void)
+{
+	ensure_lock();
+	EnterCriticalSection(&stats_lock);
+	history_write_index = 0;
+	history_samples_written = 0;
+	LeaveCriticalSection(&stats_lock);
+}
