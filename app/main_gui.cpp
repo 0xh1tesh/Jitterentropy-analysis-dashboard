@@ -223,12 +223,10 @@ static DWORD WINAPI GenerateWorkerThread(LPVOID lpParam)
 
 			QueryPerformanceCounter(&proc_start);
 			if (gen_ret == 0) {
-				size_t preview_len = byte_count > 64 ? 64 : byte_count;
 				std::stringstream ss;
-				for (size_t i = 0; i < preview_len; i++) {
+				for (size_t i = 0; i < byte_count; i++) {
 					ss << std::hex << std::setw(2) << std::setfill('0') << (int)buf[i];
 				}
-				if (byte_count > 64) ss << "...";
 				hex_str = ss.str();
 			}
 			free(buf);
@@ -529,6 +527,9 @@ public:
 		else if (json_str.find("\"action\":\"clearHistory\"") != std::string::npos ||
 			 json_str.find("\"action\": \"clearHistory\"") != std::string::npos) {
 			health_monitor_clear_history();
+			EnterCriticalSection(&g_timeline_lock);
+			g_last_timeline.valid = false;
+			LeaveCriticalSection(&g_timeline_lock);
 		}
 
 		return S_OK;

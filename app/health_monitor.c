@@ -230,7 +230,12 @@ void health_monitor_clear_history(void)
 {
 	ensure_lock();
 	EnterCriticalSection(&stats_lock);
+	bool was_initialized = current_stats.initialized;
+	memset(&current_stats, 0, sizeof(current_stats));
+	current_stats.initialized = was_initialized;
+	memset(history_ring, 0, sizeof(history_ring));
 	history_write_index = 0;
 	history_samples_written = 0;
 	LeaveCriticalSection(&stats_lock);
 }
+

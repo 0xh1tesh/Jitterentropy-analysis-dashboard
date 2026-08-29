@@ -633,6 +633,25 @@
       white-space: nowrap;
     }
     .hex-value { color: #93c5fd; font-weight: 500; }
+    .footer-metric.clickable {
+      cursor: pointer;
+      user-select: none;
+      transition: background-color .15s ease;
+    }
+    .footer-metric.clickable:hover {
+      background: var(--bg-subtle);
+    }
+    .copy-indicator {
+      opacity: 0;
+      transition: opacity .2s ease;
+      color: var(--green);
+      font-weight: normal;
+      text-transform: none;
+      margin-left: 4px;
+    }
+    .copy-indicator.visible {
+      opacity: 1;
+    }
 
     /* ─── Responsive ─── */
     @media (max-width: 1600px) {
@@ -815,7 +834,7 @@
       <div class="footer-metric"><span class="footer-label">Last error</span><span class="footer-value" id="ft-error">0 (OK)</span></div>
       <div class="footer-metric" title="Jitter range and standard deviation from the current capture."><span class="footer-label">Jitter diagnostics</span><span class="footer-value" id="ft-jitter">No samples</span></div>
       <div class="footer-metric" title="Longest measured pipeline stage."><span class="footer-label">Pipeline bottleneck</span><span class="footer-value" id="ft-bottleneck">No capture</span></div>
-      <div class="footer-metric" id="ft-hex-container" style="cursor: pointer;" title="Click to copy hex sample"><span class="footer-label">Hex sample preview <span id="ft-hex-copy-indicator" style="opacity: 0; transition: opacity 0.2s; color: var(--green); font-weight: normal; text-transform: none;">(Copied!)</span></span><span class="footer-value hex-value" id="ft-hex">No sample generated</span></div>
+      <div class="footer-metric clickable" id="ft-hex-container" title="Click to copy complete hex sample"><span class="footer-label">Hex sample preview <span id="ft-hex-copy-indicator" class="copy-indicator">(Copied!)</span></span><span class="footer-value hex-value" id="ft-hex">No sample generated</span></div>
     </footer>
   </div>
 
@@ -828,6 +847,8 @@
     let scopeAutoscale = true;
     let scopeScale = null;
     let lastActionFailed = false;
+    let latestFullHex = '';
+    let hexCopyTimeout = null;
 
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -934,7 +955,19 @@
         lastActionFailed = data.actionResult.status !== 0;
         const operation = `${data.actionResult.action || 'operation'} · ${data.actionResult.status === 0 ? 'OK' : `error ${data.actionResult.status}`}`;
         document.getElementById('ft-operation').textContent = operation;
-        if (data.actionResult.hex) document.getElementById('ft-hex').textContent = data.actionResult.hex;
+        if (data.actionResult.action === 'generate') {
+          if (data.actionResult.status === 0 && data.actionResult.hex) {
+            latestFullHex = data.actionResult.hex;
+            const preview = latestFullHex.length > 64 ? `${latestFullHex.substring(0, 64)}...` : latestFullHex;
+            document.getElementById('ft-hex').textContent = preview;
+          } else {
+            latestFullHex = '';
+            document.getElementById('ft-hex').textContent = 'Generation failed';
+          }
+        } else if (data.actionResult.action === 'benchmark') {
+          latestFullHex = '';
+          document.getElementById('ft-hex').textContent = 'N/A (Benchmark mode)';
+        }
       }
     }
 
@@ -1327,17 +1360,38 @@
     });
 
     document.getElementById('clear-history').addEventListener('click', () => {
+      latestFullHex = '';
+      frozenTelemetry = null;
+      if (btnScopeFreeze) {
+        btnScopeFreeze.classList.remove('active');
+        btnScopeFreeze.textContent = 'Freeze';
+      }
+      document.getElementById('ft-hex').textContent = 'No sample generated';
+      document.getElementById('ft-operation').textContent = 'None';
+      document.getElementById('ft-bottleneck').textContent = 'No capture';
+      document.getElementById('ft-jitter').textContent = 'No samples';
+      const ind = document.getElementById('ft-hex-copy-indicator');
+      if (ind) ind.classList.remove('visible');
+      if (hexCopyTimeout) {
+        clearTimeout(hexCopyTimeout);
+        hexCopyTimeout = null;
+      }
       window.chrome.webview.postMessage({ action: 'clearHistory' });
     });
 
     document.getElementById('ft-hex-container').addEventListener('click', async () => {
-      const hexValue = document.getElementById('ft-hex').textContent;
-      if (hexValue === 'No sample generated') return;
-      try { await navigator.clipboard.writeText(hexValue); }
-      catch { const area = document.createElement('textarea'); area.value = hexValue; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
+      if (!latestFullHex || lastActionFailed) return;
+      try { await navigator.clipboard.writeText(latestFullHex); }
+      catch { const area = document.createElement('textarea'); area.value = latestFullHex; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
       const ind = document.getElementById('ft-hex-copy-indicator');
-      ind.style.opacity = 1;
-      setTimeout(() => ind.style.opacity = 0, 1500);
+      if (ind) {
+        ind.classList.add('visible');
+        if (hexCopyTimeout) clearTimeout(hexCopyTimeout);
+        hexCopyTimeout = setTimeout(() => {
+          ind.classList.remove('visible');
+          hexCopyTimeout = null;
+        }, 1500);
+      }
     });
 
     document.querySelectorAll('.metric:not([title])').forEach(metric => {
