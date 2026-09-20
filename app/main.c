@@ -142,7 +142,7 @@ int main(int argc, char **argv)
 	}
 
 	if (run_benchmark_mode) {
-		ret = run_benchmark(benchmark_bytes, benchmark_iterations);
+		ret = run_benchmark(benchmark_bytes, benchmark_iterations, NULL);
 		if (print_status)
 			health_monitor_print_report(stdout);
 		return ret ? 1 : 0;
@@ -170,6 +170,7 @@ int main(int argc, char **argv)
 	if (ret) {
 		fprintf(stderr, "Failed to generate random bytes: %d\n", ret);
 		shutdown_rng();
+		rng_secure_zero(random_bytes, random_byte_count);
 		free(random_bytes);
 		return 1;
 	}
@@ -184,6 +185,7 @@ int main(int argc, char **argv)
 	if (write_output && write_random_file(random_bytes, random_byte_count)) {
 		fprintf(stderr, "Failed to write %s\n", RANDOM_OUTPUT_FILE);
 		shutdown_rng();
+		rng_secure_zero(random_bytes, random_byte_count);
 		free(random_bytes);
 		return 1;
 	}
@@ -192,6 +194,7 @@ int main(int argc, char **argv)
 		health_monitor_print_report(stdout);
 
 	shutdown_rng();
+	rng_secure_zero(random_bytes, random_byte_count);
 	free(random_bytes);
 	return 0;
 }

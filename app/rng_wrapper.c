@@ -57,7 +57,7 @@ int get_random_bytes(unsigned char *buffer, size_t len)
 {
 	LARGE_INTEGER start;
 	LARGE_INTEGER end;
-	ssize_t ret;
+	ssize_t ret = 0;
 	size_t bytes_generated = 0;
 	double duration_seconds;
 
@@ -76,13 +76,22 @@ int get_random_bytes(unsigned char *buffer, size_t len)
 	if (!len)
 		return 0;
 
+	/*
+	 * Resume after a short read instead of discarding the bytes already
+	 * produced. A zero or negative return ends the loop.
+	 */
 	QueryPerformanceCounter(&start);
-	ret = jent_read_entropy_safe(&rng_collector, (char *)buffer, len);
+	while (bytes_generated < len) {
+		ret = jent_read_entropy_safe(&rng_collector,
+					     (char *)buffer + bytes_generated,
+					     len - bytes_generated);
+		if (ret <= 0)
+			break;
+		bytes_generated += (size_t)ret;
+	}
 	QueryPerformanceCounter(&end);
 
 	duration_seconds = qpc_elapsed_seconds(start, end);
-	if (ret > 0)
-		bytes_generated = (size_t)ret;
 
 	if (ret < 0) {
 		health_monitor_record_generation_attempt(false, bytes_generated,
@@ -91,7 +100,7 @@ int get_random_bytes(unsigned char *buffer, size_t len)
 		return RNG_ERR_GENERATION_FAILED;
 	}
 
-	if ((size_t)ret != len) {
+	if (bytes_generated != len) {
 		health_monitor_record_generation_attempt(false, bytes_generated,
 							  duration_seconds,
 							  RNG_ERR_SHORT_READ);
@@ -108,4 +117,10 @@ void shutdown_rng(void)
 	jent_entropy_collector_free(rng_collector);
 	rng_collector = NULL;
 	health_monitor_set_initialized(false);
+}
+
+void rng_secure_zero(void *ptr, size_t len)
+{
+	if (ptr && len)
+		SecureZeroMemory(ptr, len);
 }

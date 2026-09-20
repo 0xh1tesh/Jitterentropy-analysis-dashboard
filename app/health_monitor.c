@@ -1,5 +1,6 @@
 #include "health_monitor.h"
 
+#include <string.h>
 #include <windows.h>
 
 /*
@@ -11,6 +12,8 @@
  */
 static CRITICAL_SECTION stats_lock;
 static INIT_ONCE lock_init_once = INIT_ONCE_STATIC_INIT;
+static LARGE_INTEGER epoch_frequency;
+static LARGE_INTEGER epoch_start;
 
 static BOOL CALLBACK init_lock_callback(PINIT_ONCE once, PVOID param,
 					PVOID *ctx)
@@ -19,6 +22,8 @@ static BOOL CALLBACK init_lock_callback(PINIT_ONCE once, PVOID param,
 	(void)param;
 	(void)ctx;
 	InitializeCriticalSection(&stats_lock);
+	QueryPerformanceFrequency(&epoch_frequency);
+	QueryPerformanceCounter(&epoch_start);
 	return TRUE;
 }
 
@@ -39,7 +44,7 @@ static rng_health_stats current_stats;
 #define HISTORY_RING_SIZE 300
 
 typedef struct history_sample {
-	double timestamp_seconds;   /* seconds since process start (QPC-derived) */
+	double timestamp_seconds;   /* seconds since health_monitor_get_epoch() origin */
 	uint64_t byte_count;
 	double duration_seconds;
 } history_sample;
@@ -50,17 +55,21 @@ static size_t history_samples_written = 0;
 
 static double get_process_elapsed_seconds(void)
 {
-	static LARGE_INTEGER frequency;
-	static LARGE_INTEGER start_time;
-
-	if (!frequency.QuadPart) {
-		QueryPerformanceFrequency(&frequency);
-		QueryPerformanceCounter(&start_time);
-	}
-
 	LARGE_INTEGER now;
+
+	ensure_lock();
 	QueryPerformanceCounter(&now);
-	return (double)(now.QuadPart - start_time.QuadPart) / (double)frequency.QuadPart;
+	return (double)(now.QuadPart - epoch_start.QuadPart) /
+	       (double)epoch_frequency.QuadPart;
+}
+
+void health_monitor_get_epoch(int64_t *qpc_start, int64_t *qpc_frequency)
+{
+	ensure_lock();
+	if (qpc_start)
+		*qpc_start = epoch_start.QuadPart;
+	if (qpc_frequency)
+		*qpc_frequency = epoch_frequency.QuadPart;
 }
 
 static void health_monitor_update_derived_values(void)
@@ -109,9 +118,15 @@ void health_monitor_record_generation_attempt(bool success,
 
 	current_stats.generation_call_count++;
 	current_stats.cumulative_generation_seconds += duration_seconds;
+	/*
+	 * Bytes the collector produced count even when the call later failed,
+	 * so throughput (bytes / time) covers the same set of attempts in the
+	 * numerator and denominator. byte_count is 0 for a failure that
+	 * produced nothing. Average latency is per attempt, failures included.
+	 */
+	current_stats.total_bytes_generated += (uint64_t)byte_count;
 
 	if (success) {
-		current_stats.total_bytes_generated += (uint64_t)byte_count;
 		current_stats.last_error_code = 0;
 	} else {
 		/*
