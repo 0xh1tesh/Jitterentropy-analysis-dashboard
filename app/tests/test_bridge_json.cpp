@@ -68,6 +68,25 @@ int main()
 	CHECK(!P("{\"a\":}", o));
 	CHECK(!P("{\"a\" 1}", o));
 
+	/* booleans */
+	CHECK(P("{\"a\":true,\"b\":false}", o));
+	{
+		bool bv = false;
+		CHECK(GetBool(o, "a", bv) == kOk && bv == true);
+		CHECK(GetBool(o, "b", bv) == kOk && bv == false);
+		CHECK(GetBool(o, "missing", bv) == kMissing);
+	}
+	CHECK(P("{\"a\":\"true\"}", o));
+	{
+		bool bv;
+		CHECK(GetBool(o, "a", bv) == kInvalid); /* string, not a literal */
+	}
+	CHECK(P("{\"a\":1}", o));
+	{
+		bool bv;
+		CHECK(GetBool(o, "a", bv) == kInvalid); /* 1/0 are not accepted, only true/false */
+	}
+
 	/* escaping */
 	CHECK(JsonEscape("a\"b\\c\n\x01") == "a\\\"b\\\\c\\n\\u0001");
 	CHECK(JsonEscape("deadbeef") == "deadbeef");

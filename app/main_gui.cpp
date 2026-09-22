@@ -1,7 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <unknwn.h>
-#include <timeapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <tchar.h>
@@ -13,6 +12,7 @@ extern "C" {
 #include "rng_wrapper.h"
 #include "health_monitor.h"
 #include "benchmark.h"
+#include "entropy_stats.h"
 
 extern volatile LONG benchmark_cancel_requested;
 }
@@ -31,8 +31,20 @@ extern volatile LONG benchmark_cancel_requested;
 #define GUI_MAX_BENCH_BYTES        65536
 #define GUI_MAX_BENCH_ITERATIONS   100000
 /* Generate polls for Cancel between chunks of this size. */
-#define GENERATE_CHUNK_BYTES       4096 
+#define GENERATE_CHUNK_BYTES       4096
 #define WORKER_SHUTDOWN_TIMEOUT_MS 10000
+
+/*
+ * Live SP800-90B-style diagnostic on the jitter-sample ring (see
+ * entropy_stats.h): a smaller-than-standard APT window because the ring
+ * only ever holds JITTER_RING_SIZE (256, health_monitor.c) of the most
+ * recent samples, and alpha/H chosen for a continuous dashboard reading,
+ * not a certified test. See rng_get_status_json() for the library's own,
+ * authoritative health-test state.
+ */
+#define JITTER_HEALTH_ALPHA      (1.0 / 1048576.0) /* 2^-20 */
+#define JITTER_HEALTH_H_BITS     1.0
+#define JITTER_HEALTH_APT_WINDOW 128
 
 static void WipeString(std::string &str)
 {
@@ -75,18 +87,6 @@ static double QpcElapsedSeconds(LARGE_INTEGER start, LARGE_INTEGER end)
 }
 
 /*
- * CPU Timing Jitter Sampler Data Structures & Ring Buffer
- */
-#define JITTER_RING_SIZE 256
-
-static double g_jitter_ring[JITTER_RING_SIZE];
-static size_t g_jitter_write_idx = 0;
-static size_t g_jitter_samples_written = 0;
-static CRITICAL_SECTION g_jitter_lock;
-static volatile bool g_sampler_running = false;
-static HANDLE g_sampler_thread = NULL;
-
-/*
  * Shared RNG Worker Concurrency Control & State
  */
 static CRITICAL_SECTION g_rng_busy_lock;
@@ -102,6 +102,10 @@ struct WorkerResultPayload {
 	int iterations;
 	double duration;
 	std::string hex_data;
+	/* Only set by GenerateWorkerThread, on whatever bytes were produced
+	 * (including a partial buffer from a cancelled or failed run). */
+	bool has_entropy_stats;
+	entropy_report stats;
 };
 
 static WorkerResultPayload g_pending_worker_result = {};
@@ -164,6 +168,7 @@ static void PublishRejection(const char *action, int status)
 		g_pending_worker_result.iterations = 0;
 		g_pending_worker_result.duration = 0.0;
 		g_pending_worker_result.hex_data.clear();
+		g_pending_worker_result.has_entropy_stats = false;
 	}
 	LeaveCriticalSection(&g_result_lock);
 }
@@ -200,68 +205,9 @@ static void PublishWorkerStartFailure(const char *action, size_t bytes,
 	g_pending_worker_result.iterations = iterations;
 	g_pending_worker_result.duration = 0.0;
 	g_pending_worker_result.hex_data.clear();
+	g_pending_worker_result.has_entropy_stats = false;
 	LeaveCriticalSection(&g_result_lock);
 	InterlockedExchange(&g_rng_busy, 0);
-}
-
-static DWORD WINAPI JitterSamplerThread(LPVOID lpParam)
-{
-	(void)lpParam;
-	LARGE_INTEGER freq, t1, t2;
-	QueryPerformanceFrequency(&freq);
-
-	timeBeginPeriod(1);
-
-	while (g_sampler_running) {
-		QueryPerformanceCounter(&t1);
-		volatile int sink = 0;
-		sink++;
-		QueryPerformanceCounter(&t2);
-
-		double delta_us = (double)(t2.QuadPart - t1.QuadPart) * 1e6 / (double)freq.QuadPart;
-
-		EnterCriticalSection(&g_jitter_lock);
-		g_jitter_ring[g_jitter_write_idx] = delta_us;
-		g_jitter_write_idx = (g_jitter_write_idx + 1) % JITTER_RING_SIZE;
-		if (g_jitter_samples_written < JITTER_RING_SIZE)
-			g_jitter_samples_written++;
-		LeaveCriticalSection(&g_jitter_lock);
-
-		Sleep(1);
-	}
-
-	timeEndPeriod(1);
-	return 0;
-}
-
-size_t GetJitterSamplesSnapshot(double *out_buffer, size_t max_count)
-{
-	if (!out_buffer || max_count == 0)
-		return 0;
-
-	EnterCriticalSection(&g_jitter_lock);
-	size_t available = g_jitter_samples_written;
-	size_t count_to_copy = available < max_count ? available : max_count;
-
-	if (count_to_copy == 0) {
-		LeaveCriticalSection(&g_jitter_lock);
-		return 0;
-	}
-
-	size_t start_idx;
-	if (g_jitter_samples_written < JITTER_RING_SIZE) {
-		start_idx = g_jitter_write_idx - count_to_copy;
-	} else {
-		start_idx = (g_jitter_write_idx + JITTER_RING_SIZE - count_to_copy) % JITTER_RING_SIZE;
-	}
-
-	for (size_t i = 0; i < count_to_copy; i++) {
-		size_t idx = (start_idx + i) % JITTER_RING_SIZE;
-		out_buffer[i] = g_jitter_ring[idx];
-	}
-
-	LeaveCriticalSection(&g_jitter_lock);
-	return count_to_copy;
 }
 
 struct GenerateWorkerArgs {
@@ -284,6 +230,8 @@ static DWORD WINAPI GenerateWorkerThread(LPVOID lpParam)
 	std::string hex_str = "";
 	double duration = 0.0;
 	size_t produced = 0;
+	entropy_report stats;
+	bool has_stats = false;
 
 	QueryPerformanceCounter(&req_end);
 
@@ -320,6 +268,12 @@ static DWORD WINAPI GenerateWorkerThread(LPVOID lpParam)
 					hex_str[2 * i + 1] = kHex[buf[i] & 0x0f];
 				}
 			}
+			/* Whatever was actually produced, including a partial buffer
+			 * from a cancelled or failed run -- before it is wiped below. */
+			if (produced > 0) {
+				entropy_stats_report(buf, produced, &stats);
+				has_stats = true;
+			}
 			rng_secure_zero(buf, byte_count);
 			free(buf);
 			QueryPerformanceCounter(&proc_end);
@@ -340,6 +294,9 @@ static DWORD WINAPI GenerateWorkerThread(LPVOID lpParam)
 	g_pending_worker_result.iterations = 1;
 	g_pending_worker_result.duration = duration;
 	g_pending_worker_result.hex_data = hex_str;
+	g_pending_worker_result.has_entropy_stats = has_stats;
+	if (has_stats)
+		g_pending_worker_result.stats = stats;
 	LeaveCriticalSection(&g_result_lock);
 	WipeString(hex_str);
 
@@ -395,6 +352,7 @@ static DWORD WINAPI BenchmarkWorkerThread(LPVOID lpParam)
 	g_pending_worker_result.iterations = bres.completed_iterations;
 	g_pending_worker_result.duration = duration;
 	g_pending_worker_result.hex_data = "";
+	g_pending_worker_result.has_entropy_stats = false;
 	LeaveCriticalSection(&g_result_lock);
 	QueryPerformanceCounter(&proc_end);
 
@@ -419,10 +377,19 @@ static std::string BuildTelemetryJson()
 	QueryPerformanceCounter(&ser_start);
 
 	double jitter_buf[256];
-	size_t jitter_count = GetJitterSamplesSnapshot(jitter_buf, 256);
+	size_t jitter_count = health_monitor_jitter_samples_snapshot(jitter_buf, 256);
+	entropy_rct_result jitter_rct = entropy_stats_rct(jitter_buf, jitter_count,
+							  JITTER_HEALTH_ALPHA, JITTER_HEALTH_H_BITS);
+	entropy_apt_result jitter_apt = entropy_stats_apt(jitter_buf, jitter_count,
+							  JITTER_HEALTH_APT_WINDOW,
+							  JITTER_HEALTH_ALPHA, JITTER_HEALTH_H_BITS);
 
 	rng_health_stats health;
 	health_monitor_snapshot(&health);
+
+	unsigned int library_version = rng_get_library_version();
+	char status_json[4096];
+	bool have_status = rng_get_status_json(status_json, sizeof(status_json)) == 0;
 
 	double hist_ts[300];
 	uint64_t hist_bytes[300];
@@ -450,6 +417,35 @@ static std::string BuildTelemetryJson()
 		ss << bridge::Finite(jitter_buf[i]) << (i + 1 == jitter_count ? "" : ",");
 	}
 	ss << "],\n";
+
+	/*
+	 * Diagnostic overlay on the jitter samples above (real per-call RNG
+	 * latency, not a synthetic signal -- see health_monitor_record_jitter_sample()
+	 * in rng_wrapper.c). Not the library's own internal health-test state;
+	 * that is "library.status.healthFailure" below, straight from jent_status().
+	 */
+	ss << "  \"jitterHealth\": {\n";
+	ss << "    \"sampleCount\": " << jitter_count << ",\n";
+	ss << "    \"rct\": {\"cutoff\": " << jitter_rct.cutoff
+	   << ", \"maxRun\": " << jitter_rct.max_run
+	   << ", \"passed\": " << (jitter_rct.passed ? "true" : "false") << "},\n";
+	ss << "    \"apt\": {\"windowSize\": " << jitter_apt.window_size
+	   << ", \"cutoff\": " << jitter_apt.cutoff
+	   << ", \"windowsTested\": " << jitter_apt.windows_tested
+	   << ", \"windowsFailed\": " << jitter_apt.windows_failed
+	   << ", \"passed\": " << (jitter_apt.passed ? "true" : "false") << "}\n";
+	ss << "  },\n";
+
+	/*
+	 * The library's own authoritative state: jent_version() and the raw
+	 * jent_status() JSON object, spliced in verbatim (it is already valid,
+	 * self-contained JSON -- see rng_get_status_json()).
+	 */
+	ss << "  \"library\": {\n";
+	ss << "    \"version\": \"" << (library_version / 1000000) << "."
+	   << ((library_version / 10000) % 100) << "." << ((library_version / 100) % 100) << "\",\n";
+	ss << "    \"status\": " << (have_status ? status_json : "null") << "\n";
+	ss << "  },\n";
 
 	ss << "  \"health\": {\n";
 	ss << "    \"initialized\": " << (health.initialized ? "true" : "false") << ",\n";
@@ -488,7 +484,31 @@ static std::string BuildTelemetryJson()
 		ss << "    \"bytes\": " << worker_res.bytes << ",\n";
 		ss << "    \"iterations\": " << worker_res.iterations << ",\n";
 		ss << "    \"duration\": " << bridge::Finite(worker_res.duration) << ",\n";
-		ss << "    \"hex\": \"" << bridge::JsonEscape(worker_res.hex_data) << "\"\n";
+		ss << "    \"hex\": \"" << bridge::JsonEscape(worker_res.hex_data) << "\",\n";
+		if (worker_res.has_entropy_stats) {
+			const entropy_report &r = worker_res.stats;
+
+			ss << "    \"entropyStats\": {\n";
+			ss << "      \"byteCount\": " << r.byte_count << ",\n";
+			ss << "      \"shannonBitsPerByte\": " << bridge::Finite(r.shannon_bits_per_byte) << ",\n";
+			ss << "      \"minEntropyBitsPerByte\": " << bridge::Finite(r.min_entropy_bits_per_byte) << ",\n";
+			ss << "      \"chiSquare\": {\"statistic\": " << bridge::Finite(r.chi_square.statistic)
+			   << ", \"pValue\": " << bridge::Finite(r.chi_square.p_value) << "},\n";
+			ss << "      \"monobit\": {\"pValue\": " << bridge::Finite(r.monobit.p_value)
+			   << ", \"ones\": " << r.monobit.ones << ", \"bitTotal\": " << r.monobit.bit_total << "},\n";
+			ss << "      \"serialCorrelation\": " << bridge::Finite(r.serial_correlation) << ",\n";
+			ss << "      \"runs\": {\"applicable\": " << (r.runs.applicable ? "true" : "false")
+			   << ", \"pValue\": " << bridge::Finite(r.runs.p_value)
+			   << ", \"observedRuns\": " << r.runs.observed_runs << "},\n";
+			ss << "      \"histogram\": [";
+			for (int i = 0; i < ENTROPY_STATS_BINS; i++) {
+				ss << r.histogram[i] << (i + 1 == ENTROPY_STATS_BINS ? "" : ",");
+			}
+			ss << "]\n";
+			ss << "    }\n";
+		} else {
+			ss << "    \"entropyStats\": null\n";
+		}
 		ss << "  },\n";
 	} else {
 		ss << "  \"actionResult\": null,\n";
@@ -629,6 +649,57 @@ public:
 			EnterCriticalSection(&g_timeline_lock);
 			g_last_timeline.valid = false;
 			LeaveCriticalSection(&g_timeline_lock);
+		}
+		else if (action == "configure") {
+			/* Fields are optional: only the ones present are changed. */
+			rng_settings settings;
+			long long osr = 0;
+			bool flag = false;
+			bridge::GetResult res;
+
+			if (g_rng_busy) {
+				PublishRejection("configure", RNG_ERR_BUSY);
+				return S_OK;
+			}
+
+			rng_get_settings(&settings);
+
+			res = bridge::GetInt(msg, "osr", 0, 65535, osr);
+			if (res == bridge::kInvalid) {
+				PublishRejection("configure", RNG_ERR_INVALID_ARGUMENT);
+				return S_OK;
+			}
+			if (res == bridge::kOk)
+				settings.osr = (unsigned int)osr;
+
+			res = bridge::GetBool(msg, "forceFips", flag);
+			if (res == bridge::kInvalid) {
+				PublishRejection("configure", RNG_ERR_INVALID_ARGUMENT);
+				return S_OK;
+			}
+			if (res == bridge::kOk)
+				settings.force_fips = flag;
+
+			res = bridge::GetBool(msg, "ntg1", flag);
+			if (res == bridge::kInvalid) {
+				PublishRejection("configure", RNG_ERR_INVALID_ARGUMENT);
+				return S_OK;
+			}
+			if (res == bridge::kOk)
+				settings.ntg1 = flag;
+
+			res = bridge::GetBool(msg, "disableMemoryAccess", flag);
+			if (res == bridge::kInvalid) {
+				PublishRejection("configure", RNG_ERR_INVALID_ARGUMENT);
+				return S_OK;
+			}
+			if (res == bridge::kOk)
+				settings.disable_memory_access = flag;
+
+			/* g_rng_busy == 0 here (checked above): no worker thread can be
+			 * touching the collector, so this mirrors WM_DESTROY's shutdown. */
+			shutdown_rng();
+			PublishRejection("configure", rng_configure(&settings));
 		}
 		else {
 			printf("Ignoring unknown bridge action\n");
@@ -880,14 +951,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
 			g_controller = NULL;
 		}
 
-		if (g_sampler_thread) {
-			g_sampler_running = false;
-			WaitForSingleObject(g_sampler_thread, INFINITE);
-			CloseHandle(g_sampler_thread);
-			g_sampler_thread = NULL;
-		}
-
-		DeleteCriticalSection(&g_jitter_lock);
 		DeleteCriticalSection(&g_rng_busy_lock);
 		DeleteCriticalSection(&g_worker_thread_lock);
 		DeleteCriticalSection(&g_result_lock);
@@ -907,31 +970,14 @@ int main() {
 	SetProcessDPIAware(); /* otherwise the WebView2 surface is bitmap-scaled on high-DPI displays */
 
 	EnsureQpcTimerInitialized();
-	InitializeCriticalSection(&g_jitter_lock);
 	InitializeCriticalSection(&g_rng_busy_lock);
 	InitializeCriticalSection(&g_worker_thread_lock);
 	InitializeCriticalSection(&g_result_lock);
 	InitializeCriticalSection(&g_timeline_lock);
 
-	g_sampler_running = true;
-	g_sampler_thread = CreateThread(NULL, 0, JitterSamplerThread, NULL, 0, NULL);
-	if (!g_sampler_thread) {
-		printf("Failed to create jitter sampler thread!\n");
-		DeleteCriticalSection(&g_jitter_lock);
-		DeleteCriticalSection(&g_rng_busy_lock);
-		DeleteCriticalSection(&g_worker_thread_lock);
-		DeleteCriticalSection(&g_result_lock);
-		DeleteCriticalSection(&g_timeline_lock);
-		return 1;
-	}
-
 	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 	if (FAILED(hr)) {
 		printf("CoInitializeEx failed: 0x%08X\n", (unsigned int)hr);
-		g_sampler_running = false;
-		WaitForSingleObject(g_sampler_thread, INFINITE);
-		CloseHandle(g_sampler_thread);
-		DeleteCriticalSection(&g_jitter_lock);
 		DeleteCriticalSection(&g_rng_busy_lock);
 		DeleteCriticalSection(&g_worker_thread_lock);
 		DeleteCriticalSection(&g_result_lock);
