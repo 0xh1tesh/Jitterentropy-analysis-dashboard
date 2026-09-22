@@ -133,3 +133,9 @@ if(WIN32)
     set_property(TARGET jitterentropy_gui APPEND PROPERTY
         LINK_DEPENDS "${GUI_ASSETS}")
 endif()
+
+# Unit tests (header-only helpers, no WebView2 or jitterentropy needed).
+enable_testing()
+add_executable(test_bridge_json tests/test_bridge_json.cpp)
+target_include_directories(test_bridge_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME bridge_json COMMAND test_bridge_json)

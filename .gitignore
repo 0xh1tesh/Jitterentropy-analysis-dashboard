@@ -36,3 +36,12 @@ benchmark*.csv
 *.code-workspace
 *.WebView2/
 EBWebView/
+
+# Vendored SDK binaries must NOT be caught by the blanket *.lib / *.dll rules
+# above. Without these negations a fresh clone is missing
+# deps/webview2/build/native/<arch>/WebView2Loader.dll.lib and the GUI target
+# fails at CMake configure time.
+!deps/**/*.lib
+!deps/**/*.dll
+!deps/**/*.winmd
+!deps/**/*.tlb
