@@ -53,6 +53,17 @@ static history_sample history_ring[HISTORY_RING_SIZE];
 static size_t history_write_index = 0;
 static size_t history_samples_written = 0;
 
+/*
+ * Real per-call entropy-collection latency samples, in microseconds. Same
+ * ring-buffer shape and locking as history_ring above, but at finer grain:
+ * one entry per jent_read_entropy_safe() call, several per Generate.
+ */
+#define JITTER_RING_SIZE 256
+
+static double jitter_ring[JITTER_RING_SIZE];
+static size_t jitter_write_index = 0;
+static size_t jitter_samples_written = 0;
+
 static double get_process_elapsed_seconds(void)
 {
 	LARGE_INTEGER now;
@@ -105,6 +116,15 @@ void health_monitor_record_failure(int error_code)
 	EnterCriticalSection(&stats_lock);
 	current_stats.failure_count++;
 	current_stats.last_error_code = error_code;
+	LeaveCriticalSection(&stats_lock);
+}
+
+void health_monitor_record_fips_failure(unsigned int failure_mask)
+{
+	ensure_lock();
+	EnterCriticalSection(&stats_lock);
+	current_stats.last_fips_failure_mask = failure_mask;
+	current_stats.fips_failure_count++;
 	LeaveCriticalSection(&stats_lock);
 }
 
@@ -215,6 +235,51 @@ size_t health_monitor_recent_history_snapshot(double *out_timestamps,
 	return count_to_copy;
 }
 
+void health_monitor_record_jitter_sample(double microseconds)
+{
+	ensure_lock();
+	EnterCriticalSection(&stats_lock);
+	jitter_ring[jitter_write_index] = microseconds;
+	jitter_write_index = (jitter_write_index + 1) % JITTER_RING_SIZE;
+	if (jitter_samples_written < JITTER_RING_SIZE)
+		jitter_samples_written++;
+	LeaveCriticalSection(&stats_lock);
+}
+
+size_t health_monitor_jitter_samples_snapshot(double *out_samples,
+					      size_t max_count)
+{
+	size_t available;
+	size_t count_to_copy;
+	size_t start_idx;
+	size_t i;
+
+	if (!out_samples || !max_count)
+		return 0;
+
+	ensure_lock();
+	EnterCriticalSection(&stats_lock);
+
+	available = jitter_samples_written;
+	count_to_copy = available < max_count ? available : max_count;
+
+	if (count_to_copy == 0) {
+		LeaveCriticalSection(&stats_lock);
+		return 0;
+	}
+
+	if (jitter_samples_written < JITTER_RING_SIZE)
+		start_idx = jitter_write_index - count_to_copy;
+	else
+		start_idx = (jitter_write_index + JITTER_RING_SIZE - count_to_copy) % JITTER_RING_SIZE;
+
+	for (i = 0; i < count_to_copy; i++)
+		out_samples[i] = jitter_ring[(start_idx + i) % JITTER_RING_SIZE];
+
+	LeaveCriticalSection(&stats_lock);
+	return count_to_copy;
+}
+
 void health_monitor_print_report(FILE *stream)
 {
 	rng_health_stats stats;
@@ -239,6 +304,9 @@ void health_monitor_print_report(FILE *stream)
 		stats.average_latency_seconds);
 	fprintf(stream, "  throughput: %.2f bytes/s\n",
 		stats.throughput_bytes_per_second);
+	fprintf(stream, "  FIPS/NTG.1 health-test failures: %llu (last mask: 0x%x)\n",
+		(unsigned long long)stats.fips_failure_count,
+		stats.last_fips_failure_mask);
 }
 
 void health_monitor_clear_history(void)
@@ -251,6 +319,9 @@ void health_monitor_clear_history(void)
 	memset(history_ring, 0, sizeof(history_ring));
 	history_write_index = 0;
 	history_samples_written = 0;
+	memset(jitter_ring, 0, sizeof(jitter_ring));
+	jitter_write_index = 0;
+	jitter_samples_written = 0;
 	LeaveCriticalSection(&stats_lock);
 }
 

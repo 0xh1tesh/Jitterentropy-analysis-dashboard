@@ -52,7 +52,8 @@ add_executable(jitterentropy_app
     main.c
     rng_wrapper.c
     health_monitor.c
-    benchmark.c)
+    benchmark.c
+    entropy_stats.c)
 
 target_include_directories(jitterentropy_app PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}")
@@ -95,7 +96,8 @@ if(WIN32)
         main_gui.cpp
         rng_wrapper.c
         health_monitor.c
-        benchmark.c)
+        benchmark.c
+        entropy_stats.c)
 
     target_include_directories(jitterentropy_gui PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}"
@@ -109,7 +111,6 @@ if(WIN32)
         uuid
         user32
         gdi32
-        winmm
         "${WEBVIEW2_LIB_FILE}")
 
     if(MINGW)
@@ -134,8 +135,12 @@ if(WIN32)
         LINK_DEPENDS "${GUI_ASSETS}")
 endif()
 
-# Unit tests (header-only helpers, no WebView2 or jitterentropy needed).
+# Unit tests (no WebView2 or jitterentropy needed).
 enable_testing()
 add_executable(test_bridge_json tests/test_bridge_json.cpp)
 target_include_directories(test_bridge_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME bridge_json COMMAND test_bridge_json)
+
+add_executable(test_entropy_stats tests/test_entropy_stats.c entropy_stats.c)
+target_include_directories(test_entropy_stats PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME entropy_stats COMMAND test_entropy_stats)

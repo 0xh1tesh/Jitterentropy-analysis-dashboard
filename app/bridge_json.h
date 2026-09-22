@@ -144,6 +144,24 @@ inline GetResult GetString(const Object &o, const char *key, std::string &out)
 	return kOk;
 }
 
+inline GetResult GetBool(const Object &o, const char *key, bool &out)
+{
+	Object::const_iterator it = o.find(key);
+	if (it == o.end())
+		return kMissing;
+	if (it->second.is_string)
+		return kInvalid;
+	if (it->second.text == "true") {
+		out = true;
+		return kOk;
+	}
+	if (it->second.text == "false") {
+		out = false;
+		return kOk;
+	}
+	return kInvalid;
+}
+
 /*
  * Strict base-10 integer within [lo, hi]: no sign other than '-', no leading
  * zeros, no fraction or exponent (so "1e9" and "1.0" are rejected, not
