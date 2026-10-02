@@ -101,6 +101,7 @@ struct WorkerResultPayload {
 	size_t bytes;
 	int iterations;
 	double duration;
+	double init_seconds; /* benchmark only: collector setup, excluded from duration */
 	std::string hex_data;
 	/* Only set by GenerateWorkerThread, on whatever bytes were produced
 	 * (including a partial buffer from a cancelled or failed run). */
@@ -112,6 +113,21 @@ static WorkerResultPayload g_pending_worker_result = {};
 static CRITICAL_SECTION g_result_lock;
 
 /*
+ * Byte histogram of every byte Generate produced since the last Clear or
+ * configure, guarded by g_result_lock. Per-sample statistics on a 512-byte
+ * buffer are noisy (2 expected hits per bin); the session total converges.
+ */
+static entropy_histogram g_session_hist = {};
+
+/*
+ * UI-thread copy of the collector settings for telemetry. rng_get_settings()
+ * takes rng_lock, which a worker holds for a whole collector read, so calling
+ * it on every tick stalls the message loop during a benchmark. The only
+ * writer, the "configure" action, runs on this same thread.
+ */
+static rng_settings g_ui_settings;
+
+/*
  * Timeline View Pipeline Stage Instrumentation
  */
 struct StageTiming {
@@ -121,6 +137,13 @@ struct StageTiming {
 
 struct TimelineMetrics {
 	bool valid;
+	/*
+	 * Set by a worker when it records a job; cleared by the first telemetry
+	 * frame that delivers a result afterwards, which stamps its own
+	 * serialization time. Without it every 30 ms tick restamped serialization
+	 * and "end-to-end" latency grew with wall-clock time since the job.
+	 */
+	bool serialization_pending;
 	StageTiming request;
 	StageTiming entropy;
 	StageTiming processing;
@@ -167,6 +190,7 @@ static void PublishRejection(const char *action, int status)
 		g_pending_worker_result.bytes = 0;
 		g_pending_worker_result.iterations = 0;
 		g_pending_worker_result.duration = 0.0;
+		g_pending_worker_result.init_seconds = 0.0;
 		g_pending_worker_result.hex_data.clear();
 		g_pending_worker_result.has_entropy_stats = false;
 	}
@@ -204,10 +228,33 @@ static void PublishWorkerStartFailure(const char *action, size_t bytes,
 	g_pending_worker_result.bytes = bytes;
 	g_pending_worker_result.iterations = iterations;
 	g_pending_worker_result.duration = 0.0;
+	g_pending_worker_result.init_seconds = 0.0;
 	g_pending_worker_result.hex_data.clear();
 	g_pending_worker_result.has_entropy_stats = false;
 	LeaveCriticalSection(&g_result_lock);
 	InterlockedExchange(&g_rng_busy, 0);
+}
+
+/*
+ * Called before the job's result is published, so the frame that delivers
+ * the result is the one that stamps serialization (see serialization_pending).
+ */
+static void RecordTimeline(LARGE_INTEGER req_start, LARGE_INTEGER req_end,
+			   LARGE_INTEGER ent_start, LARGE_INTEGER ent_end,
+			   LARGE_INTEGER proc_start, LARGE_INTEGER proc_end)
+{
+	EnterCriticalSection(&g_timeline_lock);
+	g_last_timeline.valid = true;
+	g_last_timeline.serialization_pending = true;
+	g_last_timeline.request.start_seconds = QpcToProcessSeconds(req_start);
+	g_last_timeline.request.duration_seconds = QpcElapsedSeconds(req_start, req_end);
+	g_last_timeline.entropy.start_seconds = QpcToProcessSeconds(ent_start);
+	g_last_timeline.entropy.duration_seconds = QpcElapsedSeconds(ent_start, ent_end);
+	g_last_timeline.processing.start_seconds = QpcToProcessSeconds(proc_start);
+	g_last_timeline.processing.duration_seconds = QpcElapsedSeconds(proc_start, proc_end);
+	g_last_timeline.serialization.start_seconds = 0.0;
+	g_last_timeline.serialization.duration_seconds = 0.0;
+	LeaveCriticalSection(&g_timeline_lock);
 }
 
 struct GenerateWorkerArgs {
@@ -286,6 +333,8 @@ static DWORD WINAPI GenerateWorkerThread(LPVOID lpParam)
 		ent_start = ent_end = proc_start = proc_end = req_end;
 	}
 
+	RecordTimeline(req_start, req_end, ent_start, ent_end, proc_start, proc_end);
+
 	EnterCriticalSection(&g_result_lock);
 	g_pending_worker_result.valid = true;
 	g_pending_worker_result.action = "generate";
@@ -293,23 +342,17 @@ static DWORD WINAPI GenerateWorkerThread(LPVOID lpParam)
 	g_pending_worker_result.bytes = produced;
 	g_pending_worker_result.iterations = 1;
 	g_pending_worker_result.duration = duration;
+	g_pending_worker_result.init_seconds = 0.0;
 	g_pending_worker_result.hex_data = hex_str;
 	g_pending_worker_result.has_entropy_stats = has_stats;
-	if (has_stats)
+	if (has_stats) {
 		g_pending_worker_result.stats = stats;
+		for (int i = 0; i < ENTROPY_STATS_BINS; i++)
+			g_session_hist.counts[i] += stats.histogram[i];
+		g_session_hist.total += stats.byte_count;
+	}
 	LeaveCriticalSection(&g_result_lock);
 	WipeString(hex_str);
-
-	/* Safely record timeline stage timings under lock */
-	EnterCriticalSection(&g_timeline_lock);
-	g_last_timeline.valid = true;
-	g_last_timeline.request.start_seconds = QpcToProcessSeconds(req_start);
-	g_last_timeline.request.duration_seconds = QpcElapsedSeconds(req_start, req_end);
-	g_last_timeline.entropy.start_seconds = QpcToProcessSeconds(ent_start);
-	g_last_timeline.entropy.duration_seconds = QpcElapsedSeconds(ent_start, ent_end);
-	g_last_timeline.processing.start_seconds = QpcToProcessSeconds(proc_start);
-	g_last_timeline.processing.duration_seconds = QpcElapsedSeconds(proc_start, proc_end);
-	LeaveCriticalSection(&g_timeline_lock);
 
 	LeaveCriticalSection(&g_rng_busy_lock);
 	InterlockedExchange(&g_rng_busy, 0);
@@ -344,27 +387,21 @@ static DWORD WINAPI BenchmarkWorkerThread(LPVOID lpParam)
 	double duration = bres.generation_seconds;
 
 	QueryPerformanceCounter(&proc_start);
-	EnterCriticalSection(&g_result_lock);
-	g_pending_worker_result.valid = true;
-	g_pending_worker_result.action = "benchmark";
-	g_pending_worker_result.status = res;
-	g_pending_worker_result.bytes = bytes_per_call;
-	g_pending_worker_result.iterations = bres.completed_iterations;
-	g_pending_worker_result.duration = duration;
-	g_pending_worker_result.hex_data = "";
-	g_pending_worker_result.has_entropy_stats = false;
-	LeaveCriticalSection(&g_result_lock);
+	WorkerResultPayload result = {};
+	result.valid = true;
+	result.action = "benchmark";
+	result.status = res;
+	result.bytes = bytes_per_call;
+	result.iterations = bres.completed_iterations;
+	result.duration = duration;
+	result.init_seconds = bres.init_seconds;
 	QueryPerformanceCounter(&proc_end);
 
-	EnterCriticalSection(&g_timeline_lock);
-	g_last_timeline.valid = true;
-	g_last_timeline.request.start_seconds = QpcToProcessSeconds(req_start);
-	g_last_timeline.request.duration_seconds = QpcElapsedSeconds(req_start, req_end);
-	g_last_timeline.entropy.start_seconds = QpcToProcessSeconds(ent_start);
-	g_last_timeline.entropy.duration_seconds = QpcElapsedSeconds(ent_start, ent_end);
-	g_last_timeline.processing.start_seconds = QpcToProcessSeconds(proc_start);
-	g_last_timeline.processing.duration_seconds = QpcElapsedSeconds(proc_start, proc_end);
-	LeaveCriticalSection(&g_timeline_lock);
+	RecordTimeline(req_start, req_end, ent_start, ent_end, proc_start, proc_end);
+
+	EnterCriticalSection(&g_result_lock);
+	g_pending_worker_result = result;
+	LeaveCriticalSection(&g_result_lock);
 
 	LeaveCriticalSection(&g_rng_busy_lock);
 	InterlockedExchange(&g_rng_busy, 0);
@@ -396,13 +433,20 @@ static std::string BuildTelemetryJson()
 	double hist_dur[300];
 	size_t hist_count = health_monitor_recent_history_snapshot(hist_ts, hist_bytes, hist_dur, 300);
 
+	const rng_settings &settings = g_ui_settings;
+
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+
 	WorkerResultPayload worker_res = {};
+	entropy_histogram session_hist;
 	EnterCriticalSection(&g_result_lock);
 	if (g_pending_worker_result.valid) {
 		worker_res = g_pending_worker_result;
 		g_pending_worker_result.valid = false;
 		WipeString(g_pending_worker_result.hex_data);
 	}
+	session_hist = g_session_hist;
 	LeaveCriticalSection(&g_result_lock);
 
 	std::stringstream ss;
@@ -411,6 +455,29 @@ static std::string BuildTelemetryJson()
 	ss << "{\n";
 	ss << "  \"type\": \"telemetry\",\n";
 	ss << "  \"busy\": " << (g_rng_busy ? "true" : "false") << ",\n";
+	ss << "  \"uptime\": " << bridge::Finite(QpcToProcessSeconds(now)) << ",\n";
+
+	/* What the next collector will be built with; library.status shows the live one. */
+	ss << "  \"settings\": {\"osr\": " << settings.osr
+	   << ", \"forceFips\": " << (settings.force_fips ? "true" : "false")
+	   << ", \"ntg1\": " << (settings.ntg1 ? "true" : "false")
+	   << ", \"disableMemoryAccess\": " << (settings.disable_memory_access ? "true" : "false") << "},\n";
+
+	{
+		entropy_chi_square chi = entropy_stats_chi_square(&session_hist);
+
+		ss << "  \"session\": {\n";
+		ss << "    \"byteCount\": " << session_hist.total << ",\n";
+		ss << "    \"shannonBitsPerByte\": " << bridge::Finite(entropy_stats_shannon(&session_hist)) << ",\n";
+		ss << "    \"minEntropyBitsPerByte\": " << bridge::Finite(entropy_stats_min_entropy(&session_hist)) << ",\n";
+		ss << "    \"chiSquare\": {\"statistic\": " << bridge::Finite(chi.statistic)
+		   << ", \"pValue\": " << bridge::Finite(chi.p_value) << "},\n";
+		ss << "    \"histogram\": [";
+		for (int i = 0; i < ENTROPY_STATS_BINS; i++)
+			ss << session_hist.counts[i] << (i + 1 == ENTROPY_STATS_BINS ? "" : ",");
+		ss << "]\n";
+		ss << "  },\n";
+	}
 
 	ss << "  \"jitter\": [";
 	for (size_t i = 0; i < jitter_count; i++) {
@@ -455,7 +522,9 @@ static std::string BuildTelemetryJson()
 	ss << "    \"last_error_code\": " << health.last_error_code << ",\n";
 	ss << "    \"cumulative_generation_seconds\": " << bridge::Finite(health.cumulative_generation_seconds) << ",\n";
 	ss << "    \"average_latency_seconds\": " << bridge::Finite(health.average_latency_seconds) << ",\n";
-	ss << "    \"throughput_bytes_per_second\": " << bridge::Finite(health.throughput_bytes_per_second) << "\n";
+	ss << "    \"throughput_bytes_per_second\": " << bridge::Finite(health.throughput_bytes_per_second) << ",\n";
+	ss << "    \"fips_failure_count\": " << health.fips_failure_count << ",\n";
+	ss << "    \"last_fips_failure_mask\": " << health.last_fips_failure_mask << "\n";
 	ss << "  },\n";
 
 	ss << "  \"history\": {\n";
@@ -484,6 +553,7 @@ static std::string BuildTelemetryJson()
 		ss << "    \"bytes\": " << worker_res.bytes << ",\n";
 		ss << "    \"iterations\": " << worker_res.iterations << ",\n";
 		ss << "    \"duration\": " << bridge::Finite(worker_res.duration) << ",\n";
+		ss << "    \"initSeconds\": " << bridge::Finite(worker_res.init_seconds) << ",\n";
 		ss << "    \"hex\": \"" << bridge::JsonEscape(worker_res.hex_data) << "\",\n";
 		if (worker_res.has_entropy_stats) {
 			const entropy_report &r = worker_res.stats;
@@ -517,7 +587,9 @@ static std::string BuildTelemetryJson()
 	QueryPerformanceCounter(&ser_end);
 
 	EnterCriticalSection(&g_timeline_lock);
-	if (g_last_timeline.valid) {
+	if (g_last_timeline.valid && g_last_timeline.serialization_pending &&
+	    worker_res.action.length() > 0) {
+		g_last_timeline.serialization_pending = false;
 		g_last_timeline.serialization.start_seconds = QpcToProcessSeconds(ser_start);
 		g_last_timeline.serialization.duration_seconds = QpcElapsedSeconds(ser_start, ser_end);
 	}
@@ -526,6 +598,7 @@ static std::string BuildTelemetryJson()
 
 	if (current_timeline.valid) {
 		ss << "  \"timeline\": {\n";
+		ss << "    \"serializationPending\": " << (current_timeline.serialization_pending ? "true" : "false") << ",\n";
 		ss << "    \"request\": {\"start\": " << bridge::Finite(current_timeline.request.start_seconds) << ", \"duration\": " << bridge::Finite(current_timeline.request.duration_seconds) << "},\n";
 		ss << "    \"entropy\": {\"start\": " << bridge::Finite(current_timeline.entropy.start_seconds) << ", \"duration\": " << bridge::Finite(current_timeline.entropy.duration_seconds) << "},\n";
 		ss << "    \"processing\": {\"start\": " << bridge::Finite(current_timeline.processing.start_seconds) << ", \"duration\": " << bridge::Finite(current_timeline.processing.duration_seconds) << "},\n";
@@ -646,6 +719,9 @@ public:
 		}
 		else if (action == "clearHistory") {
 			health_monitor_clear_history();
+			EnterCriticalSection(&g_result_lock);
+			g_session_hist = entropy_histogram();
+			LeaveCriticalSection(&g_result_lock);
 			EnterCriticalSection(&g_timeline_lock);
 			g_last_timeline.valid = false;
 			LeaveCriticalSection(&g_timeline_lock);
@@ -699,7 +775,15 @@ public:
 			/* g_rng_busy == 0 here (checked above): no worker thread can be
 			 * touching the collector, so this mirrors WM_DESTROY's shutdown. */
 			shutdown_rng();
-			PublishRejection("configure", rng_configure(&settings));
+			int cfg = rng_configure(&settings);
+			if (cfg == 0) {
+				g_ui_settings = settings;
+				/* The session statistics describe one collector configuration. */
+				EnterCriticalSection(&g_result_lock);
+				g_session_hist = entropy_histogram();
+				LeaveCriticalSection(&g_result_lock);
+			}
+			PublishRejection("configure", cfg);
 		}
 		else {
 			printf("Ignoring unknown bridge action\n");
@@ -970,6 +1054,7 @@ int main() {
 	SetProcessDPIAware(); /* otherwise the WebView2 surface is bitmap-scaled on high-DPI displays */
 
 	EnsureQpcTimerInitialized();
+	rng_get_settings(&g_ui_settings); /* no worker exists yet: cannot block */
 	InitializeCriticalSection(&g_rng_busy_lock);
 	InitializeCriticalSection(&g_worker_thread_lock);
 	InitializeCriticalSection(&g_result_lock);
@@ -1000,12 +1085,22 @@ int main() {
 		return 1;
 	}
 
+	/* 85% of the work area, centred: the dashboard needs room, and the
+	 * process is DPI-aware so fixed pixel sizes vary wildly between screens. */
+	RECT work = {0, 0, 1280, 800};
+	SystemParametersInfo(SPI_GETWORKAREA, 0, &work, 0);
+	int win_w = (work.right - work.left) * 85 / 100;
+	int win_h = (work.bottom - work.top) * 85 / 100;
+
+	/* The class name is what tests/gui_*_test.py look the window up by. */
 	HWND hWnd = CreateWindowEx(
 		0,
 		_T("WebView2TestWindowClass"),
-		_T("Jitterentropy - WebView2 C<->JS Bridge Test"),
+		_T("Jitterentropy Analysis Dashboard"),
 		WS_OVERLAPPEDWINDOW,
-		CW_USEDEFAULT, CW_USEDEFAULT, 900, 700,
+		work.left + ((work.right - work.left) - win_w) / 2,
+		work.top + ((work.bottom - work.top) - win_h) / 2,
+		win_w, win_h,
 		NULL, NULL, hInstance, NULL
 	);
 
