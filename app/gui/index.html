@@ -1,1402 +1,2054 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="bench">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Jitterentropy Analysis Dashboard</title>
   <style>
-    /* ─── Google Fonts: Playfair Display for wordmark ─── */
-    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600&display=swap');
-
+    /*
+     * Design: a bench instrument. Everything you operate sits on a light grey
+     * chassis; everything the instrument measures is shown on dark glass
+     * screens set into it. Signal orange is reserved for the two keys that
+     * start the collector. Type is Bahnschrift, Windows' DIN 1451 face.
+     */
     :root {
-      /* Backgrounds */
-      --bg-base:      #121212;
-      --bg-raised:    #141416;
-      --bg-panel:     #1a1a1e;
-      --bg-subtle:    #1f1f24;
-      --bg-active:    #252530;
+      --ui: Bahnschrift, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+      --mono: 'Cascadia Mono', Consolas, 'Courier New', monospace;
+      color-scheme: light;
 
-      /* Borders – hairlines only */
-      --border:         rgba(255,255,255,0.10);
-      --border-subtle:  rgba(255,255,255,0.06);
-      --border-focus:   #3B82F6;
+      --chassis: #DCDED9;
+      --lift: #E6E7E3;
+      --well: #CDD0CA;
+      --key: #F2F3F0;
+      --key-edge: #A9AEA6;
+      --rule: #B8BCB5;
+      --rule-hi: #EEF0EB;
+      --ink: #15181A;
+      --ink-2: #394044;
+      --ink-3: #575F63;
+      --signal: #C2410C;
+      --signal-edge: #8F2F09;
+      --focus: #0B63CE;
+      --pass: #12663A;
+      --warn: #8F4A00;
+      --fail: #B3261E;
+      --bezel: #2B3134;
+      --shadow: rgba(30, 36, 34, .18);
 
-      /* Text */
-      --text:         #F5F5F5;
-      --text-muted:   #9CA3AF;
-      --text-faint:   #6B7280;
-
-      /* Accent – used sparingly */
-      --accent:       #3B82F6;
-      --accent-dim:   rgba(59,130,246,0.14);
-
-      /* Semantic colours – kept as-is for chart rendering */
-      --cyan:         #52b9d4;
-      --cyan-dim:     #2b6679;
-      --green:        #63ba88;
-      --amber:        #d8a85a;
-      --red:          #d66b6b;
-      --grid:         rgba(255,255,255,0.05);
-
-      /* Typography roles */
-      --font-serif:  'Playfair Display', 'Georgia', serif;
-      --font-mono:   'Cascadia Mono', 'Consolas', 'Lucida Console', monospace;
-      --font-sans:   'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
-
-      /* Legacy aliases so chart JS keeps working */
-      --surface-0:    var(--bg-base);
-      --surface-1:    var(--bg-raised);
-      --surface-2:    var(--bg-panel);
-      --surface-raised: var(--bg-subtle);
-      --sans:         var(--font-sans);
-      --mono:         var(--font-mono);
+      /* Screens are the same dark glass in both themes; chart colours were
+         validated (lightness band, chroma, CVD separation, contrast) against --glass. */
+      --glass: #0C1416;
+      --glass-edge: #050A0B;
+      --glass-ink: #D9E5E2;
+      --glass-ink-2: #93A9A6;
+      --glass-raise: rgba(217, 229, 226, .07);
+      --phosphor: #22B06C;
+      --violet: #9275E6;
+      --amber: #F2B04C;
+    }
+    :root[data-theme="night"] {
+      color-scheme: dark;
+      --chassis: #181C1E;
+      --lift: #1F2427;
+      --well: #121517;
+      --key: #2A3034;
+      --key-edge: #3B4347;
+      --rule: #31383B;
+      --rule-hi: #15191B;
+      --ink: #E3E7E5;
+      --ink-2: #B5BDBA;
+      --ink-3: #8F9996;
+      --focus: #6CA8FF;
+      --pass: #5FD394;
+      --warn: #F2B04C;
+      --fail: #FF8A80;
+      --bezel: #0A0D0E;
+      --shadow: rgba(0, 0, 0, .45);
     }
 
     * { box-sizing: border-box; }
-
+    html, body { height: 100%; margin: 0; }
     body {
-      min-width: 720px;
-      min-height: 520px;
-      margin: 0;
-      overflow: hidden;
-      color: var(--text);
-      background: var(--bg-base);
-      font-family: var(--font-sans);
-      font-size: 14px;
+      background: var(--chassis);
+      color: var(--ink);
+      font: 400 14px/1.45 var(--ui);
+      -webkit-font-smoothing: antialiased;
     }
+    h1, h2, h3, p, dl, dd, ul { margin: 0; padding: 0; }
+    ul { list-style: none; }
+    button, input { font: inherit; color: inherit; }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .icon { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .icon.lg { width: 30px; height: 30px; stroke-width: 1.8; }
+    .num { font-variant-numeric: tabular-nums; }
+    [data-state="pass"] { --state: var(--pass); }
+    [data-state="warn"] { --state: var(--warn); }
+    [data-state="fail"] { --state: var(--fail); }
+    [data-state="idle"], [data-state="na"] { --state: var(--ink-3); }
 
-    .app-shell { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
-
-    /* ─── Header ─── */
-    header {
+    /* ---------- Shell ---------- */
+    .shell {
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      grid-template-rows: 58px minmax(0, 1fr);
+      height: 100vh;
+    }
+    .topbar {
+      grid-column: 1 / -1;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 24px;
-      min-height: 64px;
-      padding: 0 24px;
-      background: var(--bg-raised);
-      border-bottom: 1px solid var(--border);
-    }
-
-    .identity { display: flex; align-items: center; gap: 12px; min-width: 220px; }
-
-    /* Wordmark icon – now accent blue crosshairs */
-    .identity-mark {
-      width: 28px; height: 28px;
-      border: 1.5px solid var(--accent);
-      border-radius: 3px;
+      gap: 22px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--rule);
+      box-shadow: 0 1px 0 var(--rule-hi);
       position: relative;
-      opacity: .85;
-      flex-shrink: 0;
+      z-index: 2;
     }
-    .identity-mark::before, .identity-mark::after {
-      content: ""; position: absolute; background: var(--accent);
-    }
-    .identity-mark::before { width: 12px; height: 1.5px; left: 6px; top: 11px; }
-    .identity-mark::after  { width: 1.5px; height: 12px; left: 11px; top: 6px; }
-
-    /* App name – SERIF ONLY HERE */
-    .identity h1 {
-      margin: 0;
-      font-family: var(--font-serif);
-      font-size: 18px;
-      font-weight: 600;
-      letter-spacing: .005em;
-      color: var(--text);
-      line-height: 1.15;
-    }
-    /* Sub-title – sans-serif, muted */
-    .identity p {
-      margin: 2px 0 0;
-      color: var(--text-faint);
-      font-family: var(--font-sans);
-      font-size: 11px;
-      letter-spacing: .03em;
-    }
-
-    /* ─── Controls ─── */
-    .controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-    .control-group {
-      display: flex; align-items: center; gap: 7px;
-      padding: 6px 10px;
-      border: 1px solid var(--border-subtle);
-      border-radius: 4px;
-      background: transparent;
-    }
-    label {
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-    input {
-      width: 72px; min-height: 28px;
-      padding: 4px 7px;
-      color: var(--text);
-      background: var(--bg-subtle);
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      font: 12px var(--font-mono);
-      text-align: right;
-      transition: border-color .15s ease;
-    }
-    input:focus { outline: none; border-color: var(--accent); }
-    input:disabled { color: var(--text-faint); cursor: not-allowed; }
-    button { font: 600 12px var(--font-sans); cursor: pointer; }
-
-    /* Primary action buttons – accent blue */
-    .btn {
-      min-height: 30px;
-      padding: 5px 14px;
-      color: #fff;
-      background: var(--accent);
-      border: 1px solid var(--accent);
-      border-radius: 3px;
-      letter-spacing: .02em;
-      transition: opacity .15s ease, transform .1s ease;
-    }
-    .btn:hover:not(:disabled) { opacity: .85; }
-    .btn:active:not(:disabled) { transform: translateY(1px); }
-    .btn:focus-visible, .tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-    /* Cancel / secondary */
-    .btn-secondary {
-      color: var(--text-muted);
-      background: transparent;
-      border-color: var(--border);
-    }
-    .btn-secondary:hover:not(:disabled) { color: var(--text); border-color: rgba(255,255,255,0.2); }
-    .btn:disabled { color: var(--text-faint); background: transparent; border-color: var(--border-subtle); cursor: not-allowed; }
-
-    /* Export / scope mini-actions */
-    .scope-action, .export-action {
-      min-height: 24px;
-      padding: 3px 8px;
-      color: var(--text-muted);
-      background: transparent;
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: .04em;
-      text-transform: uppercase;
-      transition: color .12s, border-color .12s;
-    }
-    .scope-action:hover, .scope-action.active, .export-action:hover {
-      color: var(--text);
-      border-color: var(--accent);
-    }
-    .scope-action.active { color: #93c5fd; }
-    .scope-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
-
-    /* ─── Status badge ─── */
-    .status {
-      display: flex; align-items: center; gap: 7px;
-      min-width: 106px; padding: 6px 10px;
-      color: var(--text-muted);
-      border: 1px solid var(--border-subtle);
-      border-radius: 4px;
-      background: transparent;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      letter-spacing: .04em;
-      text-transform: uppercase;
-    }
-    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); transition: background-color .2s ease; }
-    .status.healthy { color: #86efac; border-color: rgba(134,239,172,.25); }
-    .status.healthy .status-dot { background: var(--green); }
-    .status.busy { color: #fcd34d; border-color: rgba(252,211,77,.25); }
-    .status.busy .status-dot { background: var(--amber); animation: status-pulse 1.5s ease-in-out infinite; }
-    .status.error { color: #fca5a5; border-color: rgba(252,165,165,.25); }
-    .status.error .status-dot { background: var(--red); }
-    @keyframes status-pulse { 50% { opacity: .35; } }
-
-    /* ─── Main / tabs ─── */
-    main {
-      min-height: 0;
-      display: grid;
-      grid-template-rows: auto 1fr;
-      padding: 16px 24px 14px;
-      gap: 12px;
-    }
-    .tab-list {
-      display: flex;
-      gap: 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .tab-btn {
-      position: relative;
-      padding: 8px 16px 9px;
-      color: var(--text-faint);
-      background: transparent;
-      border: 0;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-      transition: color .15s;
-    }
-    .tab-btn:hover { color: var(--text-muted); }
-    .tab-btn.active { color: var(--text); }
-    /* Active underline – accent blue */
-    .tab-btn.active::after {
-      content: "";
-      position: absolute;
-      right: 10px; bottom: -1px; left: 10px;
-      height: 2px;
-      background: var(--accent);
-    }
-
-    /* ─── Workspace / panel container ─── */
-    .workspace {
-      min-height: 0;
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      background: var(--bg-raised);
-      overflow: hidden;
-    }
-    .tab-content { display: none; height: 100%; grid-template-rows: auto 1fr; }
-    .tab-content.active { display: grid; animation: view-enter .16s ease-out; }
-    @keyframes view-enter { from { opacity: .55; } to { opacity: 1; } }
-
-    /* ─── Stat tile strip – HAIRLINES, no fills ─── */
-    .metric-strip {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      min-height: 68px;
-      background: transparent;
-      border-bottom: 1px solid var(--border);
-    }
-    .metric {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 4px;
-      min-width: 0;
-      padding: 10px 16px;
-      border-right: 1px solid var(--border-subtle);
-      background: transparent;
-    }
-    .metric:last-child { border-right: 0; }
-
-    /* Label: MONOSPACE UPPERCASE */
-    .metric-label {
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-      font-size: 9px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-    /* Value: SANS-SERIF */
-    .metric-value {
-      overflow: hidden;
-      color: var(--text);
-      font-family: var(--font-sans);
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: -.02em;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    /* Live / accent value – blue accent */
-    .metric-value.live { color: #93c5fd; }
-    .metric-value.good { color: #86efac; }
-    .metric-value.warn { color: #fcd34d; }
-    .metric-value.error { color: #fca5a5; }
-
-    .metric-strip.dense { grid-template-columns: repeat(9, minmax(0, 1fr)); }
-    .metric.capture-timing-card { min-width: 140px; }
-    .capture-timing-value {
-      overflow: visible !important;
-      white-space: normal !important;
-      word-break: break-word !important;
-      font-family: var(--font-sans) !important;
-      font-size: 12px !important;
-      line-height: 1.25 !important;
-      color: var(--text-muted) !important;
-    }
-    .metric small { color: var(--text-faint); font: 10px var(--font-mono); }
-
-    /* ─── Canvas area ─── */
-    .canvas-wrap {
-      min-width: 0; min-height: 0;
-      display: grid;
-      padding: 14px 16px 16px;
-      background: var(--bg-base);
-    }
-    canvas {
-      display: block;
-      width: 100%; height: 100%;
-      min-width: 0; min-height: 0;
-      background: #0d0d10;
-      border: 1px solid var(--border-subtle);
-      border-radius: 3px;
-    }
-
-    /* ─── Timeline panel ─── */
-    .timeline-content { display: grid; grid-template-rows: auto 1fr; min-height: 0; }
-    .timeline-panel {
-      min-width: 0;
-      min-height: 0;
-      padding: 16px 20px 24px;
+    .rail {
       overflow-y: auto;
-      background: var(--bg-base);
+      background: var(--lift);
+      border-right: 1px solid var(--rule);
+      box-shadow: 1px 0 0 var(--rule-hi);
+    }
+    .main {
+      min-width: 0;
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
       gap: 14px;
+      padding: 14px 20px 24px;
     }
 
-    .timeline-section-header {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      border-bottom: 1px solid var(--border-subtle);
-      padding-bottom: 6px;
-    }
-    .timeline-section-header .section-title {
-      color: var(--text-muted);
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-    .timeline-section-header .section-subtitle {
-      color: var(--text-faint);
-      font-family: var(--font-mono);
-      font-size: 10px;
-    }
+    /* ---------- Top bar ---------- */
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .mark { width: 30px; height: 30px; flex: none; }
+    .brand-name { font-size: 18px; font-weight: 600; letter-spacing: -.01em; }
+    .brand-ver { color: var(--ink-3); font-size: 13px; font-stretch: 87.5%; white-space: nowrap; }
 
-    .timeline-chart-box {
-      background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      overflow: hidden;
+    .job { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+    .lamp {
+      width: 13px; height: 13px; flex: none; border-radius: 50%;
+      background: var(--ink-3);
+      box-shadow: 0 0 0 2px var(--chassis), 0 0 0 3px var(--rule), inset 0 -2px 3px rgba(0,0,0,.25);
     }
+    .lamp[data-state="pass"] { background: #2FBF71; }
+    .lamp[data-state="warn"] { background: #E8A317; box-shadow: 0 0 0 2px var(--chassis), 0 0 0 3px var(--rule), 0 0 10px #E8A317; }
+    .lamp[data-state="fail"] { background: #E5483E; box-shadow: 0 0 0 2px var(--chassis), 0 0 0 3px var(--rule), 0 0 10px #E5483E; }
+    .job-text { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .job-bar { width: 160px; height: 6px; flex: none; border-radius: 3px; background: var(--well); box-shadow: inset 0 1px 1px rgba(0,0,0,.2); overflow: hidden; }
+    .job-bar > div { height: 100%; width: 0; background: var(--signal); transition: width .2s linear; }
 
-    .timeline-ruler {
-      display: grid;
-      grid-template-columns: 250px minmax(0, 1fr);
-      align-items: center;
-      background: var(--bg-panel);
-      border-bottom: 1px solid var(--border);
-      padding: 7px 14px;
+    .top-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .uptime { color: var(--ink-3); font-size: 13px; margin-right: 6px; white-space: nowrap; }
+    .menu-wrap { position: relative; }
+    .menu {
+      position: absolute; right: 0; top: calc(100% + 6px);
+      min-width: 240px; padding: 6px;
+      background: var(--key); border: 1px solid var(--key-edge); border-radius: 9px;
+      box-shadow: 0 10px 24px var(--shadow);
     }
-    .ruler-meta-header {
-      color: var(--text-faint);
-      font-family: var(--font-mono);
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
+    .menu button {
+      display: flex; align-items: center; gap: 10px; width: 100%;
+      padding: 8px 10px; border: 0; border-radius: 6px; background: none;
+      text-align: left; cursor: pointer;
     }
-    .timeline-scale {
-      position: relative;
-      height: 18px;
-      background-image: linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-    }
-    .timeline-scale span {
-      position: absolute;
-      bottom: 0;
-      transform: translateX(-50%);
-      font: 10px var(--font-mono);
-      color: var(--text-faint);
-    }
+    .menu button:hover, .menu button:focus-visible { background: var(--well); outline: none; }
 
-    .timeline-track {
-      display: grid;
-      grid-template-columns: 250px minmax(0, 1fr);
-      align-items: center;
-      min-height: 52px;
-      border-bottom: 1px solid var(--border-subtle);
-      padding: 0 14px;
-      background: var(--bg-raised);
-      transition: background-color .15s ease;
-    }
-    .timeline-track:last-child { border-bottom: none; }
-    .timeline-track:hover { background: var(--bg-subtle); }
-
-    .track-meta {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
-      padding-right: 12px;
-      border-right: 1px solid var(--border-subtle);
-    }
-    .track-num {
-      font: 700 11px var(--font-mono);
-      color: var(--text-faint);
-      background: var(--bg-panel);
-      padding: 2px 6px;
-      border-radius: 3px;
-      border: 1px solid var(--border-subtle);
-    }
-    .track-details {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 0;
-      flex: 1;
-    }
-    .track-name {
-      color: var(--text);
-      font: 600 12px var(--font-sans);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .track-duration {
-      color: var(--text-muted);
-      font: 11px var(--font-mono);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .track-lane {
-      position: relative;
-      height: 34px;
-      overflow: hidden;
-      border-radius: 3px;
-      background-image: linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-    }
-    .execution-bar {
-      position: absolute;
-      top: 7px;
-      height: 20px;
-      min-width: 14px;
-      border-radius: 3px;
-      opacity: .9;
-      box-shadow: inset 0 1px rgba(255,255,255,.15);
-      transition: left .14s ease-out, width .14s ease-out;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .execution-bar.microsecond-stage::after {
-      content: "";
-      width: 3px; height: 3px;
-      background: #fff;
-      border-radius: 50%;
-      box-shadow: 0 0 3px #fff;
-    }
-    .execution-bar.request      { background: var(--accent); }
-    .execution-bar.entropy      { background: var(--green); }
-    .execution-bar.processing   { background: var(--amber); }
-    .execution-bar.serialization{ background: #6b7280; }
-    .track-micro-tag { font-size: 10px; color: var(--text-faint); margin-left: 4px; }
-
-    /* ─── Pipeline observation ─── */
-    .analysis-summary {
-      padding: 14px 16px;
-      background: var(--bg-raised);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-    }
-    .analysis-header-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-    .analysis-heading {
-      margin: 0;
-      color: var(--text-faint);
-      font-family: var(--font-mono);
-      font-size: 9px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-    .analysis-badge {
-      font: 600 10px var(--font-mono);
-      padding: 2px 7px;
-      border-radius: 3px;
-      background: rgba(252,211,77,.08);
-      color: #fcd34d;
-      border: 1px solid rgba(252,211,77,.25);
-    }
-    .analysis-value { color: var(--text); font: 600 14px var(--font-sans); }
-    .analysis-note { margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
-
-    /* ─── Stage summary cards ─── */
-    .stage-analysis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-    .stage-card {
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 11px 12px;
-      border: 1px solid var(--border-subtle);
-      border-left: 2px solid var(--border);
-      border-radius: 4px;
-      background: var(--bg-raised);
-    }
-    .stage-card.bottleneck {
-      border-left-color: var(--amber);
-      background: rgba(216,168,90,.04);
-    }
-    .stage-card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      padding-bottom: 7px;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    .stage-card-title {
-      color: var(--text);
-      font: 600 12px var(--font-sans);
-    }
-    .stage-card-tag {
-      font-family: var(--font-mono);
-      font-size: 9px;
-      font-weight: 600;
-      letter-spacing: .06em;
-      padding: 2px 5px;
-      border-radius: 3px;
-      background: var(--bg-panel);
-      color: var(--text-faint);
-      border: 1px solid var(--border-subtle);
-      text-transform: uppercase;
-    }
-    .stage-card-tag.bottleneck {
-      background: rgba(216,168,90,.12);
-      color: #fcd34d;
-      border-color: rgba(216,168,90,.3);
-    }
-    .stage-card-data {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 4px 10px;
-      margin: 9px 0;
-      color: var(--text-faint);
-      font: 11px var(--font-mono);
-    }
-    .stage-card-data strong {
-      color: var(--text);
-      font-weight: 600;
-      text-align: right;
-      font-family: var(--font-sans);
-    }
-    .stage-card-desc {
-      color: var(--text-faint);
-      font-size: 11px;
-      line-height: 1.3;
-      padding-top: 6px;
-      border-top: 1px solid var(--border-subtle);
-    }
-
-    /* ─── Footer ─── */
-    footer {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 0;
-      min-height: 96px;
-      padding: 0 24px;
-      background: var(--bg-raised);
-      border-top: 1px solid var(--border);
-    }
-    .footer-metric {
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      min-width: 0;
-      padding: 9px 12px;
-      border-right: 1px solid var(--border-subtle);
-    }
-    .footer-metric:nth-child(4n+1) { padding-left: 0; }
-    .footer-metric:nth-child(4n)   { padding-right: 0; border-right: 0; }
-    .footer-metric:nth-child(-n+4) { border-bottom: 1px solid var(--border-subtle); }
-    .footer-label {
-      color: var(--text-faint);
-      font-family: var(--font-mono);
-      font-size: 9px;
-      font-weight: 600;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-    .footer-value {
-      margin-top: 4px;
-      overflow: hidden;
-      color: var(--text);
-      font: 600 12px var(--font-sans);
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .hex-value { color: #93c5fd; font-weight: 500; }
-    .footer-metric.clickable {
+    /* ---------- Keys & fields ---------- */
+    .key {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      min-height: 36px; padding: 0 14px;
+      background: var(--key); color: var(--ink);
+      border: 1px solid var(--key-edge); border-radius: 7px;
+      box-shadow: inset 0 -2px 0 rgba(0,0,0,.1), 0 1px 0 var(--rule-hi);
+      font-weight: 600; font-size: 14px; white-space: nowrap;
       cursor: pointer;
-      user-select: none;
-      transition: background-color .15s ease;
     }
-    .footer-metric.clickable:hover {
-      background: var(--bg-subtle);
+    .key:hover:not(:disabled) { border-color: var(--ink-3); }
+    .key:active:not(:disabled) { transform: translateY(1px); box-shadow: inset 0 -1px 0 rgba(0,0,0,.1); }
+    .key:disabled { opacity: .45; cursor: not-allowed; }
+    .key.run { background: var(--signal); color: #fff; border-color: var(--signal-edge); }
+    .key.run:disabled { opacity: 1; background: var(--well); color: var(--ink-3); border-color: var(--rule); box-shadow: none; }
+    .key.run:disabled kbd { background: none; border-color: var(--rule); }
+    .key.run:hover:not(:disabled) { border-color: #5C1E06; background: #B23B0A; }
+    .key.strong { background: var(--ink); color: var(--chassis); border-color: var(--ink); }
+    .key.small { min-height: 32px; padding: 0 11px; font-size: 13.5px; }
+    .key.wide { width: 100%; }
+    .key kbd {
+      font: 500 11.5px/1 var(--ui); padding: 3px 5px; border-radius: 4px;
+      background: rgba(0,0,0,.08); border: 1px solid rgba(0,0,0,.12);
     }
-    .copy-indicator {
-      opacity: 0;
-      transition: opacity .2s ease;
-      color: var(--green);
-      font-weight: normal;
-      text-transform: none;
-      margin-left: 4px;
+    .key.run kbd { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.28); }
+    .icon-btn {
+      display: inline-grid; place-items: center; width: 36px; height: 36px;
+      border-radius: 7px; border: 1px solid transparent; background: none; cursor: pointer; color: var(--ink-2);
     }
-    .copy-indicator.visible {
-      opacity: 1;
-    }
+    .icon-btn:hover { border-color: var(--key-edge); background: var(--key); color: var(--ink); }
 
-    /* ─── Responsive ─── */
-    @media (max-width: 1600px) {
-      .metric-strip.dense { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .field { display: grid; gap: 5px; min-width: 0; }
+    .field label, .label { color: var(--ink-2); font-size: 13px; font-stretch: 87.5%; }
+    .field input {
+      width: 100%; height: 38px; padding: 0 11px;
+      background: var(--well); border: 1px solid var(--rule); border-radius: 7px;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,.14);
+      font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums;
     }
-    @media (max-width: 1100px) {
-      header { align-items: flex-start; }
-      .controls { max-width: 620px; }
-      .metric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .metric:nth-child(3) { border-right: 0; }
-      .metric:nth-child(-n+3) { border-bottom: 1px solid var(--border-subtle); }
-      footer { grid-template-columns: repeat(3, minmax(100px, 1fr)) minmax(200px, 2fr); }
-      .footer-metric:nth-child(3) { border-right: 0; }
-      .timeline-ruler, .timeline-track { grid-template-columns: minmax(145px, .8fr) minmax(0, 3.2fr); gap: 12px; }
-      .metric-strip.dense { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .stage-analysis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .field input:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+    .field input[aria-invalid="true"] { border-color: var(--fail); }
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .key-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .hint { color: var(--ink-3); font-size: 13px; line-height: 1.4; }
+    .hint.error { color: var(--fail); }
+
+    .seg {
+      display: inline-flex; gap: 2px; padding: 3px;
+      background: var(--well); border-radius: 9px;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,.14);
+    }
+    .seg button {
+      display: inline-flex; align-items: center; gap: 7px;
+      min-height: 30px; padding: 0 12px;
+      border: 0; border-radius: 6px; background: none;
+      color: var(--ink-2); font-weight: 500; cursor: pointer; white-space: nowrap;
+    }
+    .seg button:hover { color: var(--ink); }
+    .seg button[aria-selected="true"], .seg button[aria-pressed="true"] {
+      background: var(--key); color: var(--ink);
+      box-shadow: 0 1px 0 rgba(0,0,0,.12), 0 0 0 1px var(--key-edge);
+    }
+    .seg.fill { display: flex; }
+    .seg.fill button { flex: 1; justify-content: center; }
+    .seg .shortcut { color: var(--ink-3); font-size: 12px; }
+
+    /* ---------- Rail ---------- */
+    .rail-sec { padding: 16px 18px 18px; display: grid; gap: 10px; border-bottom: 1px solid var(--rule); box-shadow: 0 1px 0 var(--rule-hi); }
+    .rail-sec:last-child { border-bottom: 0; box-shadow: none; }
+    .rail-sec h2 { font-size: 15px; font-weight: 600; }
+    .health-list { display: grid; gap: 2px; }
+    .health-list li {
+      display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 9px;
+      padding: 6px 0;
+    }
+    .health-list .icon { color: var(--state); }
+    .health-list .state { color: var(--state); font-weight: 600; font-size: 13.5px; }
+    .kv { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; font-size: 13.5px; }
+    .kv dt { color: var(--ink-2); }
+    .kv dd { font-weight: 600; text-align: right; }
+    .linkish {
+      justify-self: start; padding: 0; border: 0; background: none; cursor: pointer;
+      color: var(--ink); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--rule);
+    }
+    .linkish:hover { text-decoration-color: var(--ink); }
+
+    /* ---------- Views ---------- */
+    .viewbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .view { display: grid; gap: 16px; align-content: start; }
+    #view-overview { grid-template-columns: minmax(280px, 400px) minmax(0, 1fr); }
+    #view-sample { grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); }
+    #view-performance { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    #view-collector { grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); }
+    /* Charts get explicit heights; everything else sizes to its content. */
+    #scr-scope { --h: clamp(220px, calc(100vh - 640px), 560px); }
+    #scr-walk { --h: clamp(220px, calc(100vh - 660px), 420px); }
+    #scr-lat { --h: clamp(220px, calc(100vh - 640px), 480px); }
+    #scr-thr { --h: 230px; }
+    .span-all { grid-column: 1 / -1; }
+
+    /* ---------- Screens ---------- */
+    .screen {
+      position: relative;
+      display: grid; grid-template-rows: auto 1fr auto;
+      min-width: 0;
+      margin: 5px;
+      background: var(--glass); color: var(--glass-ink);
+      border-radius: 12px;
+      box-shadow: 0 0 0 1px var(--glass-edge), 0 0 0 5px var(--bezel), 0 6px 0 5px var(--shadow), inset 0 2px 18px rgba(0,0,0,.65);
+    }
+    .screen-head { display: flex; align-items: center; gap: 12px; padding: 11px 14px 4px; min-width: 0; }
+    .screen-title { font-size: 14.5px; font-weight: 600; white-space: nowrap; }
+    .screen-sub { color: var(--glass-ink-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .screen-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
+    .screen-foot { padding: 4px 14px 11px; color: var(--glass-ink-2); font-size: 13px; }
+    .screen .seg { background: var(--glass-raise); box-shadow: none; }
+    .screen .seg button { color: var(--glass-ink-2); min-height: 28px; }
+    .screen .seg button:hover { color: var(--glass-ink); }
+    .screen .seg button[aria-pressed="true"], .screen .seg button[aria-selected="true"] {
+      background: rgba(217,229,226,.16); color: var(--glass-ink); box-shadow: none;
+    }
+    .screen .icon-btn { color: var(--glass-ink-2); width: 32px; height: 32px; }
+    .screen .icon-btn:hover { background: var(--glass-raise); border-color: transparent; color: var(--glass-ink); }
+    .plot { position: relative; min-height: var(--h, 240px); margin: 4px 8px 6px; }
+    .plot canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .screen-empty {
+      position: absolute; inset: 44px 16px 16px;
+      display: grid; place-content: center; justify-items: center; gap: 12px;
+      text-align: center; color: var(--glass-ink-2); font-size: 14px;
+    }
+    .screen-empty[hidden] { display: none; }
+    .legend { display: flex; gap: 14px; color: var(--glass-ink-2); font-size: 13px; white-space: nowrap; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .swatch { width: 14px; height: 3px; border-radius: 2px; background: var(--c); }
+    .swatch.ring { width: 9px; height: 9px; border-radius: 50%; background: none; border: 2px solid var(--c); }
+    .live { display: inline-flex; align-items: center; gap: 6px; color: var(--phosphor); font-size: 13px; font-weight: 600; }
+    .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+    .live[hidden] { display: none; }
+
+    /* Noise field */
+    .noise-wrap { position: relative; min-height: 240px; margin: 6px 14px; }
+    #cv-noise { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); image-rendering: pixelated; border-radius: 3px; box-shadow: 0 0 0 1px rgba(217,229,226,.12); }
+
+    /* ---------- Readouts (engraved on the chassis) ---------- */
+    .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+    .readout { padding: 6px 16px 4px; border-left: 1px solid var(--rule); box-shadow: inset 1px 0 0 var(--rule-hi); min-width: 0; }
+    .readout:first-child { border-left: 0; box-shadow: none; padding-left: 4px; }
+    .readout dt { color: var(--ink-2); font-size: 13px; font-stretch: 87.5%; white-space: nowrap; }
+    .readout dd { font-size: 21px; font-weight: 500; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .readout dd small { font-size: 13px; color: var(--ink-3); font-weight: 400; margin-left: 3px; }
+    .readout .note { color: var(--ink-3); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .readout[data-state] dd { color: var(--state); display: flex; align-items: center; gap: 6px; }
+
+    /* ---------- Verdict ---------- */
+    .verdict { display: grid; align-content: start; gap: 14px; padding: 8px 6px 4px 8px; min-width: 0; }
+    .verdict-head { display: flex; align-items: center; gap: 12px; color: var(--state); }
+    .verdict-head h2 { font-size: 34px; line-height: 1.05; font-weight: 600; font-stretch: 87.5%; letter-spacing: -.015em; }
+    .verdict-reason { color: var(--ink-2); font-size: 15px; max-width: 64ch; }
+    .figures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); box-shadow: 0 1px 0 var(--rule-hi), inset 0 1px 0 var(--rule-hi); padding: 12px 0; }
+    .figures > div { padding: 0 16px; border-left: 1px solid var(--rule); min-width: 0; }
+    .figures > div:first-child { border-left: 0; padding-left: 0; }
+    .figures dt { color: var(--ink-2); font-size: 13px; font-stretch: 87.5%; }
+    .figures dd { font-size: 27px; font-weight: 500; letter-spacing: -.02em; line-height: 1.2; }
+    .figures dd small { display: inline-block; font-size: 13px; color: var(--ink-3); font-weight: 400; margin-left: 4px; letter-spacing: 0; white-space: nowrap; }
+    .figures .note { color: var(--ink-3); font-size: 12.5px; }
+
+    .tests { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(120px, 2fr) 92px; align-items: center; column-gap: 16px; row-gap: 4px; }
+    .test-name { display: grid; line-height: 1.25; padding: 4px 0; }
+    .test-name b { font-weight: 600; }
+    .test-name small { color: var(--ink-3); font-size: 12.5px; }
+    .test-p { display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: var(--state); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .test-p .icon { width: 16px; height: 16px; }
+    .ruler { position: relative; height: 20px; }
+    .ruler::before {
+      content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 4px; border-radius: 2px;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--fail) 30%, var(--well)) 0 50%, var(--well) 50% 100%);
+      box-shadow: inset 0 1px 1px rgba(0,0,0,.15);
+    }
+    .ruler::after { content: ""; position: absolute; left: 50%; top: 3px; width: 1px; height: 14px; background: var(--ink-3); }
+    .ruler i {
+      position: absolute; top: 4px; left: calc(var(--pos) * 100%); width: 12px; height: 12px; margin-left: -6px;
+      border-radius: 50%; background: var(--state); box-shadow: 0 0 0 2px var(--chassis);
+    }
+    .ruler[data-empty] i { display: none; }
+    .ruler-scale { grid-column: 2; display: flex; justify-content: space-between; color: var(--ink-3); font-size: 12px; position: relative; }
+    .ruler-scale span:nth-child(2) { position: absolute; left: 50%; transform: translateX(-50%); }
+
+    /* ---------- Sample view ---------- */
+    .heatmap { display: grid; grid-template-columns: 28px repeat(16, minmax(0, 1fr)); gap: 2px; margin: 6px 14px 4px; align-self: start; }
+    .heatmap .lbl { color: var(--glass-ink-2); font: 11.5px var(--mono); display: grid; place-items: center; }
+    .heatmap .cell { aspect-ratio: 1; border-radius: 3px; background: #263033; }
+    .heat-legend { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; margin: 8px 14px 0 44px; color: var(--glass-ink-2); font-size: 12.5px; }
+    .heat-legend .bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #4C8DF6, #263033 50%, #F0A030); }
+
+    .detail-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    .detail-table th, .detail-table td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+    .detail-table thead th { color: var(--ink-2); font-weight: 500; font-size: 13px; font-stretch: 87.5%; }
+    .detail-table td small { display: block; color: var(--ink-3); font-size: 12.5px; }
+    .detail-table td.r, .detail-table th.r { text-align: right; padding-right: 0; }
+    .detail-table .state { color: var(--state); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+    .panel-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+
+    .hexdump {
+      margin: 4px 14px 12px; padding: 4px 0; overflow: auto; height: 320px;
+      font: 13px/1.6 var(--mono); color: var(--glass-ink); white-space: pre; tab-size: 2;
+    }
+    .hexdump::selection, .hexdump *::selection { background: rgba(34,176,108,.35); }
+
+    /* ---------- Performance ---------- */
+    .log-wrap { min-width: 0; }
+    .log-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    .log-table th, .log-table td { text-align: left; padding: 7px 14px 7px 0; border-bottom: 1px solid var(--rule); }
+    .log-table th { color: var(--ink-2); font-weight: 500; font-size: 13px; font-stretch: 87.5%; }
+    .log-table .state { color: var(--state); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+    .log-table td:first-child { color: var(--ink-3); width: 90px; }
+    .empty-line { color: var(--ink-3); padding: 10px 0; }
+    .stage-table { width: 100%; border-collapse: collapse; color: var(--glass-ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+    .stage-table th, .stage-table td { text-align: right; padding: 5px 0 5px 12px; border-top: 1px solid rgba(217,229,226,.1); }
+    .stage-table th { color: var(--glass-ink-2); font-weight: 500; }
+    .stage-table th:first-child, .stage-table td:first-child { text-align: left; padding-left: 0; }
+    .stage-table tr.longest td { font-weight: 600; }
+    #pipe-svg { width: 100%; display: block; }
+    .pipe-body { padding: 4px 14px 12px; display: grid; gap: 10px; align-content: start; }
+
+    /* ---------- Collector ---------- */
+    .cfg { display: grid; gap: 16px; align-content: start; padding: 4px 4px 0; }
+    .switch { display: grid; grid-template-columns: 46px 1fr; gap: 12px; align-items: start; cursor: pointer; }
+    .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .switch-track {
+      width: 46px; height: 26px; border-radius: 13px; margin-top: 1px;
+      background: var(--well); border: 1px solid var(--rule); box-shadow: inset 0 1px 2px rgba(0,0,0,.2);
+      position: relative;
+    }
+    .switch-track::after {
+      content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%;
+      background: var(--key); border: 1px solid var(--key-edge); box-shadow: 0 1px 2px rgba(0,0,0,.25);
+      transition: transform .15s ease;
+    }
+    .switch input:checked + .switch-track { background: var(--ink); border-color: var(--ink); }
+    .switch input:checked + .switch-track::after { transform: translateX(20px); }
+    .switch input:focus-visible + .switch-track { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .switch-text b { display: block; font-weight: 600; }
+    .switch-text small { display: block; color: var(--ink-3); font-size: 13px; }
+    .form-msg { font-weight: 500; min-height: 1.4em; }
+    .form-msg[data-state] { color: var(--state); }
+    .env { display: grid; gap: 12px; align-content: start; min-width: 0; padding: 4px 4px 0; }
+    .env-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 24px; }
+    .env-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--rule); min-width: 0; }
+    .env-list dt { color: var(--ink-2); white-space: nowrap; }
+    .env-list dd { font-weight: 600; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .code { margin: 4px 14px 12px; overflow: auto; font: 13px/1.55 var(--mono); color: var(--glass-ink); white-space: pre; height: 340px; }
+
+    /* ---------- Tooltip ---------- */
+    .tip {
+      position: fixed; z-index: 10; pointer-events: none;
+      padding: 7px 10px; border-radius: 7px;
+      background: #F4F6F3; color: #15181A; border: 1px solid #9FA59C;
+      box-shadow: 0 6px 18px rgba(0,0,0,.35);
+      font-size: 13px; line-height: 1.4; font-variant-numeric: tabular-nums; white-space: nowrap;
+    }
+    .tip b { font-weight: 600; }
+    .tip[hidden] { display: none; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; animation: none !important; }
+    }
+    @media (max-width: 1080px) {
+      .shell { grid-template-columns: 1fr; grid-template-rows: auto auto auto; height: auto; min-height: 100vh; }
+      .topbar { flex-wrap: wrap; padding: 10px 16px; row-gap: 8px; }
+      .rail { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); border-right: 0; border-bottom: 1px solid var(--rule); overflow: visible; }
+      .rail-sec { border-bottom: 0; box-shadow: none; }
+      .main { overflow: visible; padding: 14px 16px 24px; }
+      #view-overview, #view-sample, #view-collector, #view-performance { grid-template-columns: 1fr; }
+      .noise-wrap { min-height: 320px; }
+      .figures { grid-template-columns: 1fr; gap: 10px; }
+      .figures > div { border-left: 0; padding: 0; }
     }
   </style>
 </head>
 <body>
-  <div class="app-shell">
-    <header>
-      <div class="identity">
-        <div class="identity-mark" aria-hidden="true"></div>
-        <div>
-          <h1>Jitterentropy</h1>
-          <p>Analysis Dashboard</p>
-        </div>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-pass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.7 2.7L16 9.8"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.8 2.6 19.6h18.8Z"/><path d="M12 10v4.4"/><path d="M12 17.1v.2"/></symbol>
+    <symbol id="i-fail" viewBox="0 0 24 24"><path d="M8.2 3h7.6L21 8.2v7.6L15.8 21H8.2L3 15.8V8.2Z"/><path d="m9.4 9.4 5.2 5.2m0-5.2-5.2 5.2"/></symbol>
+    <symbol id="i-idle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8.5 12h7"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 4v11m-4.5-4.5L12 15l4.5-4.5"/><path d="M5 19.5h14"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5v-2a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5Z"/></symbol>
+    <symbol id="i-clear" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 12.5h9.4l.8-12.5"/></symbol>
+  </svg>
+
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 30 30" aria-hidden="true">
+          <rect x="1" y="1" width="28" height="28" rx="7" fill="#2B3134"/>
+          <rect x="4.5" y="4.5" width="21" height="21" rx="4" fill="#0C1416"/>
+          <path d="M7 19.5h3V10.5h4.6v9h2v-9h3.7v9H23" fill="none" stroke="#22B06C" stroke-width="1.9" stroke-linejoin="round"/>
+        </svg>
+        <span class="brand-name">Jitterentropy</span>
+        <span class="brand-ver" id="lib-version">Connecting</span>
       </div>
 
-      <div class="controls">
-        <div class="control-group">
-          <label for="input-generate-bytes">Generate bytes</label>
-          <input type="number" id="input-generate-bytes" value="512" min="1" max="65536">
-          <button class="btn" id="btn-generate">Generate</button>
+      <div class="job">
+        <span class="lamp" id="lamp" data-state="idle" aria-hidden="true"></span>
+        <span class="job-text" id="job-text">Waiting for the native host</span>
+        <div class="job-bar" id="job-bar" hidden><div></div></div>
+        <button class="key small" id="btn-stop" hidden>Stop <kbd>Esc</kbd></button>
+      </div>
+
+      <div class="top-actions">
+        <span class="uptime num" id="uptime" title="Time since the dashboard started"></span>
+        <button class="icon-btn" id="btn-theme" aria-pressed="false" aria-label="Night mode" title="Night mode">
+          <svg class="icon"><use href="#i-moon"/></svg>
+        </button>
+        <div class="menu-wrap">
+          <button class="key small" id="btn-export" aria-haspopup="menu" aria-expanded="false" aria-controls="export-menu">Export</button>
+          <div class="menu" id="export-menu" role="menu" hidden>
+            <button role="menuitem" data-export="json"><svg class="icon"><use href="#i-save"/></svg>Save telemetry as JSON</button>
+            <button role="menuitem" data-export="csv"><svg class="icon"><use href="#i-save"/></svg>Save history and sample as CSV</button>
+            <button role="menuitem" data-export="summary"><svg class="icon"><use href="#i-copy"/></svg>Copy summary</button>
+          </div>
         </div>
-        <div class="control-group">
-          <label for="input-bench-bytes">Bytes per call</label>
-          <input type="number" id="input-bench-bytes" value="1024" min="1" max="65536">
-          <label for="input-bench-iter">Iterations</label>
-          <input type="number" id="input-bench-iter" value="1000" min="1" max="100000">
-          <button class="btn" id="btn-benchmark">Benchmark</button>
-          <button class="btn btn-secondary" id="btn-cancel" disabled>Cancel</button>
-        </div>
-        <div class="status" id="status-badge" aria-live="polite">
-          <span class="status-dot"></span><span id="status-text">Not initialized</span>
-        </div>
-        <div class="control-group" aria-label="Export controls">
-          <button class="export-action" id="export-json" title="Export the latest telemetry as JSON.">Export JSON</button>
-          <button class="export-action" id="export-csv" title="Export available history and pipeline data as CSV.">Export CSV</button>
-          <button class="export-action" id="export-png" title="Export the current graph or timing diagram as PNG.">Export PNG</button>
-          <button class="export-action" id="copy-metrics" title="Copy current measured and derived diagnostics.">Copy metrics</button>
-          <button class="export-action" id="clear-history" title="Clear the performance history ring buffer.">Clear Data</button>
-        </div>
+        <button class="key small" id="btn-clear" title="Reset counters, history, session statistics and the activity log">
+          <svg class="icon"><use href="#i-clear"/></svg>Clear session
+        </button>
       </div>
     </header>
 
-    <main>
-      <nav class="tab-list" aria-label="Analysis views">
-        <button class="tab-btn active" data-tab="oscilloscope">Oscilloscope</button>
-        <button class="tab-btn" data-tab="performance">Performance</button>
-        <button class="tab-btn" data-tab="timeline">Timing diagram</button>
-      </nav>
+    <aside class="rail" aria-label="Controls">
+      <section class="rail-sec" aria-labelledby="h-gen">
+        <h2 id="h-gen">Generate a sample</h2>
+        <div class="field">
+          <label for="gen-bytes">Bytes</label>
+          <input id="gen-bytes" type="number" min="1" max="65536" step="1" value="4096" aria-describedby="gen-hint">
+        </div>
+        <div class="seg fill" role="group" aria-label="Sample size presets">
+          <button type="button" data-bytes="512" aria-pressed="false">512 B</button>
+          <button type="button" data-bytes="4096" aria-pressed="true">4 KiB</button>
+          <button type="button" data-bytes="65536" aria-pressed="false">64 KiB</button>
+        </div>
+        <button class="key run wide" id="btn-generate">Generate <kbd>G</kbd></button>
+        <p class="hint" id="gen-hint">Up to 64 KiB. Bigger samples give steadier test results.</p>
+      </section>
 
-      <section class="workspace">
-        <div class="tab-content active" id="view-oscilloscope">
-          <div class="metric-strip dense">
-            <div class="metric"><span class="metric-label">Minimum delta</span><span class="metric-value live" id="scope-min">0.0000 µs</span></div>
-            <div class="metric"><span class="metric-label">Maximum delta</span><span class="metric-value" id="scope-max">0.0000 µs</span></div>
-            <div class="metric"><span class="metric-label">Median</span><span class="metric-value good" id="scope-median">0.0000 µs</span></div>
-            <div class="metric"><span class="metric-label">95th percentile</span><span class="metric-value warn" id="scope-p95">0.0000 µs</span></div>
-            <div class="metric"><span class="metric-label">Standard deviation</span><span class="metric-value" id="scope-stddev">0.0000 µs</span></div>
-            <div class="metric"><span class="metric-label">Samples</span><span class="metric-value" id="scope-count">0</span></div>
-            <div class="metric" title="Freeze holds the displayed telemetry snapshot; reset returns to live data. Autoscale controls the vertical scale calculation."><span class="metric-label">Capture controls</span><div class="scope-actions"><button class="scope-action active" id="scope-autoscale">Autoscale</button><button class="scope-action" id="scope-freeze">Freeze</button><button class="scope-action" id="scope-reset">Reset</button></div></div>
-            <div class="metric" title="Latest jitter sample and arithmetic mean of the retained jitter capture."><span class="metric-label">Current / average</span><span class="metric-value" id="scope-current-average">0.0000 / 0.0000 µs</span></div>
-            <div class="metric capture-timing-card" title="Jitter samples do not carry timestamps in the existing telemetry contract, so exact capture duration and sample frequency are intentionally not inferred."><span class="metric-label">Capture timing</span><span class="metric-value capture-timing-value" id="scope-capture-meta">Not timestamped</span></div>
+      <section class="rail-sec" aria-labelledby="h-bench">
+        <h2 id="h-bench">Benchmark</h2>
+        <div class="field-row">
+          <div class="field">
+            <label for="bench-bytes">Bytes per call</label>
+            <input id="bench-bytes" type="number" min="1" max="65536" step="1" value="1024">
           </div>
-          <div class="canvas-wrap"><canvas id="canvas-oscilloscope" aria-label="CPU timing jitter waveform"></canvas></div>
+          <div class="field">
+            <label for="bench-iter">Calls</label>
+            <input id="bench-iter" type="number" min="1" max="100000" step="1" value="200">
+          </div>
+        </div>
+        <button class="key run wide" id="btn-benchmark">Run benchmark <kbd>B</kbd></button>
+        <p class="hint" id="bench-hint">Measures latency and throughput on a fresh collector.</p>
+      </section>
+
+      <section class="rail-sec" aria-labelledby="h-health">
+        <h2 id="h-health">Library health tests</h2>
+        <ul class="health-list" id="health-list"></ul>
+        <dl class="kv">
+          <dt>Collector restarts</dt><dd class="num" id="hl-reinit">0</dd>
+          <dt>FIPS failure callbacks</dt><dd class="num" id="hl-fips">0</dd>
+        </dl>
+        <p class="hint" id="health-note">The library runs these tests on its raw noise source once a collector exists.</p>
+      </section>
+
+      <section class="rail-sec" aria-labelledby="h-coll">
+        <h2 id="h-coll">Collector settings</h2>
+        <dl class="kv" id="settings-kv">
+          <dt>Oversampling</dt><dd id="kv-osr">Automatic</dd>
+          <dt>SP 800-90B enforcement</dt><dd id="kv-fips">Off</dd>
+          <dt>AIS 20/31 NTG.1</dt><dd id="kv-ntg1">Off</dd>
+          <dt>Memory access noise</dt><dd id="kv-mem">On</dd>
+        </dl>
+        <button class="linkish" data-goto="collector">Change settings</button>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div class="viewbar">
+        <div class="seg" role="tablist" aria-label="Views" id="tabs">
+          <button role="tab" id="tab-overview" aria-controls="view-overview" aria-selected="true" data-view="overview">Overview <span class="shortcut">1</span></button>
+          <button role="tab" id="tab-sample" aria-controls="view-sample" aria-selected="false" tabindex="-1" data-view="sample">Sample analysis <span class="shortcut">2</span></button>
+          <button role="tab" id="tab-performance" aria-controls="view-performance" aria-selected="false" tabindex="-1" data-view="performance">Performance <span class="shortcut">3</span></button>
+          <button role="tab" id="tab-collector" aria-controls="view-collector" aria-selected="false" tabindex="-1" data-view="collector">Collector <span class="shortcut">4</span></button>
+        </div>
+      </div>
+
+      <!-- Overview -->
+      <section class="view" id="view-overview" role="tabpanel" aria-labelledby="tab-overview">
+        <div class="screen" id="scr-noise">
+          <div class="screen-head">
+            <span class="screen-title">Noise field</span>
+            <div class="screen-tools">
+              <div class="seg" role="group" aria-label="Noise field resolution">
+                <button type="button" data-noise="bits" aria-pressed="true">Bits</button>
+                <button type="button" data-noise="bytes" aria-pressed="false">Bytes</button>
+              </div>
+              <button class="icon-btn" data-save="cv-noise" aria-label="Save noise field as PNG" title="Save as PNG"><svg class="icon"><use href="#i-save"/></svg></button>
+            </div>
+          </div>
+          <div class="noise-wrap" id="noise-wrap"><canvas id="cv-noise" width="1" height="1" role="img" aria-label="Bitmap of the last generated sample"></canvas></div>
+          <p class="screen-foot" id="noise-caption">Every bit of the last sample, drawn in order. Stripes, blocks or repeats would mean the output is not random.</p>
+          <div class="screen-empty" id="noise-empty">
+            <span>Generate a sample to see its bits.</span>
+            <button class="key run small" data-action="generate">Generate <kbd>G</kbd></button>
+          </div>
         </div>
 
-        <div class="tab-content" id="view-performance">
-          <div class="metric-strip dense">
-            <div class="metric"><span class="metric-label">Current throughput</span><span class="metric-value good" id="perf-throughput">0.00 MB/s</span></div>
-            <div class="metric"><span class="metric-label">Average latency</span><span class="metric-value" id="perf-latency">0.000 ms</span></div>
-            <div class="metric"><span class="metric-label">Total generated</span><span class="metric-value" id="perf-total-bytes">0 B</span></div>
-            <div class="metric"><span class="metric-label">Calls / failures</span><span class="metric-value" id="perf-calls">0 / 0</span></div>
-            <div class="metric"><span class="metric-label">Failures</span><span class="metric-value error" id="perf-failures">0</span></div>
-            <div class="metric" title="Peak and lowest non-zero per-call throughput in the retained history."><span class="metric-label">Throughput range</span><span class="metric-value" id="perf-throughput-range">0.00–0.00 MB/s</span></div>
-            <div class="metric" title="Rolling latency mean and population standard deviation over the most recent retained calls."><span class="metric-label">Latency diagnostics</span><span class="metric-value" id="perf-latency-diagnostics">0.000 ms</span><small id="perf-latency-trend">Stable</small></div>
+        <div class="verdict" id="verdict" data-state="idle">
+          <div class="verdict-head">
+            <svg class="icon lg"><use href="#i-idle"/></svg>
+            <h2 id="verdict-word">No sample yet</h2>
           </div>
-          <div class="canvas-wrap"><canvas id="canvas-performance" aria-label="Generation latency history with rolling average"></canvas></div>
+          <p class="verdict-reason" id="verdict-reason">Generate a sample to test it. The library's own health tests are shown on the left.</p>
+          <dl class="figures">
+            <div><dt>Shannon entropy</dt><dd><span id="fig-shannon">—</span><small>of 8 bits per byte</small></dd><p class="note" id="fig-shannon-note">Session total</p></div>
+            <div><dt>Min-entropy</dt><dd><span id="fig-min">—</span><small>bits per byte</small></dd><p class="note" id="fig-min-note">Worst-case guessability</p></div>
+            <div><dt>Bytes analysed</dt><dd><span id="fig-bytes">0 B</span></dd><p class="note" id="fig-bytes-note">This session</p></div>
+          </dl>
+          <div class="tests" id="tests" role="table" aria-label="Statistical tests on the last sample"></div>
         </div>
 
-        <div class="tab-content timeline-content" id="view-timeline">
-          <div class="metric-strip">
-            <div class="metric"><span class="metric-label">Pipeline status</span><span class="metric-value good" id="tl-status">Ready</span></div>
-            <div class="metric"><span class="metric-label">End-to-end latency</span><span class="metric-value" id="tl-total-duration">0.000 ms</span></div>
-            <div class="metric"><span class="metric-label">Reference time</span><span class="metric-value" id="tl-request-time">N/A</span></div>
-            <div class="metric"><span class="metric-label">Measured stages</span><span class="metric-value">4</span></div>
-            <div class="metric" title="The longest measured stage in the current pipeline record."><span class="metric-label">Bottleneck</span><span class="metric-value warn" id="tl-bottleneck">N/A</span></div>
-            <div class="metric" title="Telemetry serialization duration divided by measured end-to-end time."><span class="metric-label">Serialization cost</span><span class="metric-value" id="tl-serialization-cost">0.0%</span></div>
+        <div class="screen span-all" id="scr-scope">
+          <div class="screen-head">
+            <span class="screen-title">Collector timing</span>
+            <span class="screen-sub">Duration of each entropy read, newest on the right</span>
+            <div class="screen-tools">
+              <span class="live" id="scope-live" hidden>Live</span>
+              <div class="seg" role="group" aria-label="Scope controls">
+                <button type="button" id="btn-pause" aria-pressed="false" title="Pause the trace (Space)"><svg class="icon"><use href="#i-pause"/></svg>Pause</button>
+                <button type="button" id="btn-autoscale" aria-pressed="true" title="Rescale the vertical axis to the data">Autoscale</button>
+              </div>
+              <button class="icon-btn" data-save="cv-scope" aria-label="Save timing trace as PNG" title="Save as PNG"><svg class="icon"><use href="#i-save"/></svg></button>
+            </div>
           </div>
-          <div class="timeline-panel">
-            <div class="timeline-section-header">
-              <span class="section-title">Execution Pipeline Analysis</span>
-              <span class="section-subtitle">High-precision QueryPerformanceCounter stage trace</span>
-            </div>
+          <div class="plot"><canvas id="cv-scope" role="img" aria-label="Collector call duration trace"></canvas></div>
+          <div></div>
+          <div class="screen-empty" id="scope-empty"><span>No collector reads yet. Each generate or benchmark call adds one point.</span></div>
+        </div>
 
-            <div class="timeline-chart-box">
-              <div class="timeline-ruler">
-                <div class="ruler-meta-header">Stage / Share</div>
-                <div class="timeline-scale" id="timeline-scale"></div>
-              </div>
-              <div class="timeline-track">
-                <div class="track-meta">
-                  <div class="track-num">01</div>
-                  <div class="track-details">
-                    <span class="track-name">Request dispatch</span>
-                    <span class="track-duration" id="tl-time-request">0.0 µs &middot; 0.00%</span>
-                  </div>
-                </div>
-                <div class="track-lane"><div class="execution-bar request" id="bar-request"></div></div>
-              </div>
-              <div class="timeline-track">
-                <div class="track-meta">
-                  <div class="track-num">02</div>
-                  <div class="track-details">
-                    <span class="track-name">Entropy collection</span>
-                    <span class="track-duration" id="tl-time-entropy">0.0 µs &middot; 0.00%</span>
-                  </div>
-                </div>
-                <div class="track-lane"><div class="execution-bar entropy" id="bar-entropy"></div></div>
-              </div>
-              <div class="timeline-track">
-                <div class="track-meta">
-                  <div class="track-num">03</div>
-                  <div class="track-details">
-                    <span class="track-name">Result processing</span>
-                    <span class="track-duration" id="tl-time-processing">0.0 µs &middot; 0.00%</span>
-                  </div>
-                </div>
-                <div class="track-lane"><div class="execution-bar processing" id="bar-processing"></div></div>
-              </div>
-              <div class="timeline-track">
-                <div class="track-meta">
-                  <div class="track-num">04</div>
-                  <div class="track-details">
-                    <span class="track-name">Telemetry serialization</span>
-                    <span class="track-duration" id="tl-time-serialization">0.0 µs &middot; 0.00%</span>
-                  </div>
-                </div>
-                <div class="track-lane"><div class="execution-bar serialization" id="bar-serialization"></div></div>
-              </div>
-            </div>
+        <dl class="readouts span-all" aria-label="Timing statistics">
+          <div class="readout"><dt>Median</dt><dd class="num" id="ro-median">—</dd></div>
+          <div class="readout"><dt>95th percentile</dt><dd class="num" id="ro-p95">—</dd></div>
+          <div class="readout"><dt>Fastest</dt><dd class="num" id="ro-min">—</dd></div>
+          <div class="readout"><dt>Slowest</dt><dd class="num" id="ro-max">—</dd></div>
+          <div class="readout"><dt>Spread (σ)</dt><dd class="num" id="ro-sd">—</dd></div>
+          <div class="readout"><dt>Calls shown</dt><dd class="num" id="ro-count">0</dd></div>
+          <div class="readout" id="ro-stream" data-state="idle" title="SP 800-90B style repetition and proportion checks applied to the timings above. A coarse proxy, not the library's own tests."><dt>Timing stream checks</dt><dd id="ro-stream-v">—</dd><p class="note" id="ro-stream-n">Proxy check on timings</p></div>
+        </dl>
+      </section>
 
-            <div class="analysis-summary" title="Bottleneck analysis and pipeline execution insight">
-              <div class="analysis-header-row">
-                <span class="analysis-heading">Pipeline observation &amp; bottleneck insight</span>
-                <span class="analysis-badge" id="tl-analysis-badge">No capture</span>
+      <!-- Sample analysis -->
+      <section class="view" id="view-sample" role="tabpanel" aria-labelledby="tab-sample" hidden>
+        <div class="screen" id="scr-heat">
+          <div class="screen-head">
+            <span class="screen-title">Byte frequency</span>
+            <div class="screen-tools">
+              <div class="seg" role="group" aria-label="Histogram source">
+                <button type="button" data-heat="session" aria-pressed="true">Session</button>
+                <button type="button" data-heat="sample" aria-pressed="false">Last sample</button>
               </div>
-              <div class="analysis-value" id="tl-analysis-bottleneck">No capture data available</div>
-              <p class="analysis-note" id="tl-analysis-note">Run a generation or benchmark to inspect the measured execution pipeline.</p>
             </div>
-
-            <div class="timeline-section-header">
-              <span class="section-title">Structured Stage Summaries</span>
-              <span class="section-subtitle">Microsecond-level breakdown per stage</span>
-            </div>
-            <div class="stage-analysis" id="timeline-stage-analysis"></div>
           </div>
+          <div>
+            <div class="heatmap" id="heatmap" role="img" aria-label="Frequency of each byte value"></div>
+            <div class="heat-legend" aria-hidden="true"><span>Fewer</span><span class="bar"></span><span>More</span></div>
+          </div>
+          <p class="screen-foot" id="heat-caption">Each cell is one byte value, 0x00 to 0xFF. Neutral means it appeared as often as expected.</p>
+          <div class="screen-empty" id="heat-empty"><span>No bytes analysed yet.</span></div>
+        </div>
+
+        <div class="detail" style="min-width:0">
+          <h2 class="panel-title">Test results</h2>
+          <p class="hint" style="margin-bottom:10px">p-values below 0.01 are flagged. One random sample in a hundred trips each test by chance.</p>
+          <table class="detail-table" id="detail-table">
+            <thead><tr><th>Measure</th><th class="r">Last sample</th><th class="r">Session</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="screen span-all" id="scr-walk">
+          <div class="screen-head">
+            <span class="screen-title">Bit balance walk</span>
+            <span class="screen-sub">Steps up for every 1, down for every 0. A fair source stays inside the 99% band.</span>
+            <div class="screen-tools">
+              <span class="legend"><span><i class="swatch" style="--c:var(--phosphor)"></i>Walk</span><span><i class="swatch" style="--c:rgba(217,229,226,.35);height:9px"></i>99% band</span></span>
+              <button class="icon-btn" data-save="cv-walk" aria-label="Save bit walk as PNG" title="Save as PNG"><svg class="icon"><use href="#i-save"/></svg></button>
+            </div>
+          </div>
+          <div class="plot"><canvas id="cv-walk" role="img" aria-label="Cumulative bit balance of the last sample"></canvas></div>
+          <div></div>
+          <div class="screen-empty" id="walk-empty"><span>Generate a sample to trace its bits.</span></div>
+        </div>
+
+        <div class="screen span-all" id="scr-hex">
+          <div class="screen-head">
+            <span class="screen-title">Hex dump</span>
+            <span class="screen-sub" id="hex-sub">Last sample</span>
+            <div class="screen-tools">
+              <button class="icon-btn" id="btn-copy-hex" aria-label="Copy the sample as hex" title="Copy as hex"><svg class="icon"><use href="#i-copy"/></svg></button>
+            </div>
+          </div>
+          <pre class="hexdump" id="hexdump" tabindex="0" aria-label="Hex dump of the last sample"></pre>
+          <div></div>
+          <div class="screen-empty" id="hex-empty"><span>No sample yet.</span></div>
+        </div>
+      </section>
+
+      <!-- Performance -->
+      <section class="view" id="view-performance" role="tabpanel" aria-labelledby="tab-performance" hidden>
+        <dl class="readouts span-all" aria-label="Performance totals">
+          <div class="readout"><dt>Throughput</dt><dd class="num" id="pf-thr">—</dd><p class="note">All calls this session</p></div>
+          <div class="readout"><dt>Mean call latency</dt><dd class="num" id="pf-lat">—</dd><p class="note" id="pf-trend">No calls yet</p></div>
+          <div class="readout"><dt>Calls</dt><dd class="num" id="pf-calls">0</dd><p class="note" id="pf-fail">No failures</p></div>
+          <div class="readout"><dt>Generated</dt><dd class="num" id="pf-bytes">0 B</dd><p class="note">Including benchmarks</p></div>
+          <div class="readout"><dt>Last benchmark</dt><dd class="num" id="pf-bench">—</dd><p class="note" id="pf-bench-n">None run yet</p></div>
+        </dl>
+
+        <div class="screen span-all" id="scr-lat">
+          <div class="screen-head">
+            <span class="screen-title">Latency per call</span>
+            <span class="screen-sub">Last 300 calls</span>
+            <div class="screen-tools">
+              <span class="legend">
+                <span><i class="swatch" style="--c:var(--phosphor)"></i>Each call</span>
+                <span><i class="swatch" style="--c:var(--violet)"></i><span id="lat-roll-label">Rolling mean</span></span>
+                <span><i class="swatch ring" style="--c:var(--amber)"></i>Slow call</span>
+              </span>
+              <button class="icon-btn" data-save="cv-lat" aria-label="Save latency chart as PNG" title="Save as PNG"><svg class="icon"><use href="#i-save"/></svg></button>
+            </div>
+          </div>
+          <div class="plot"><canvas id="cv-lat" role="img" aria-label="Latency of each recent call"></canvas></div>
+          <div></div>
+          <div class="screen-empty" id="lat-empty"><span>No calls recorded. Generate or run a benchmark.</span></div>
+        </div>
+
+        <div class="screen" id="scr-thr">
+          <div class="screen-head">
+            <span class="screen-title">Throughput per call</span>
+            <span class="screen-sub">Bytes delivered over call duration</span>
+          </div>
+          <div class="plot"><canvas id="cv-thr" role="img" aria-label="Throughput of each recent call"></canvas></div>
+          <div></div>
+          <div class="screen-empty" id="thr-empty"><span>No calls recorded.</span></div>
+        </div>
+
+        <div class="screen" id="scr-pipe">
+          <div class="screen-head">
+            <span class="screen-title">Last operation, stage by stage</span>
+          </div>
+          <div class="pipe-body">
+            <svg id="pipe-svg" role="img" aria-label="Logic-analyser view of the last operation's stages"></svg>
+            <table class="stage-table" id="stage-table"></table>
+          </div>
+          <div></div>
+          <div class="screen-empty" id="pipe-empty"><span>Run a generate or benchmark to capture its stages.</span></div>
+        </div>
+
+        <div class="log-wrap span-all">
+          <h2 class="panel-title">Activity</h2>
+          <table class="log-table">
+            <thead><tr><th>Time</th><th>Action</th><th>Result</th><th>Details</th></tr></thead>
+            <tbody id="log-body"></tbody>
+          </table>
+          <p class="empty-line" id="log-empty">Nothing yet. Results of every generate, benchmark and settings change appear here.</p>
+        </div>
+      </section>
+
+      <!-- Collector -->
+      <section class="view" id="view-collector" role="tabpanel" aria-labelledby="tab-collector" hidden>
+        <form class="cfg" id="cfg-form" novalidate>
+          <div>
+            <h2 class="panel-title">Collector settings</h2>
+            <p class="hint">Applying releases the current collector. The next run starts a new one and repeats the startup self-test.</p>
+          </div>
+          <div class="field">
+            <label for="cfg-osr">Oversampling rate</label>
+            <input id="cfg-osr" type="number" min="0" max="65535" step="1" value="0" aria-describedby="cfg-osr-hint">
+            <p class="hint" id="cfg-osr-hint">0 lets the library choose. Higher values spend more time per output bit for extra margin.</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="cfg-fips"><span class="switch-track"></span>
+            <span class="switch-text"><b>Enforce SP 800-90B</b><small>Full FIPS health-test enforcement, JENT_FORCE_FIPS</small></span></label>
+          <label class="switch"><input type="checkbox" id="cfg-ntg1"><span class="switch-track"></span>
+            <span class="switch-text"><b>Enforce AIS 20/31 NTG.1</b><small>German BSI class requirements, JENT_NTG1</small></span></label>
+          <label class="switch"><input type="checkbox" id="cfg-mem" checked><span class="switch-track"></span>
+            <span class="switch-text"><b>Use memory access noise</b><small>Turning this off saves memory but collects less entropy</small></span></label>
+          <div class="key-row">
+            <button type="submit" class="key strong" id="btn-apply">Apply settings</button>
+            <button type="button" class="key" id="btn-revert">Revert</button>
+          </div>
+          <p class="form-msg" id="cfg-msg" role="status"></p>
+        </form>
+
+        <div class="env">
+          <h2 class="panel-title">Runtime environment</h2>
+          <dl class="env-list" id="env-list"></dl>
+          <p class="hint" id="env-note">Reported by the library once a collector exists.</p>
+        </div>
+
+        <div class="screen span-all" id="scr-raw">
+          <div class="screen-head">
+            <span class="screen-title">Library status report</span>
+            <span class="screen-sub">jent_status() output, verbatim</span>
+            <div class="screen-tools">
+              <button class="icon-btn" id="btn-copy-raw" aria-label="Copy the status report" title="Copy"><svg class="icon"><use href="#i-copy"/></svg></button>
+            </div>
+          </div>
+          <pre class="code" id="raw-status" tabindex="0"></pre>
+          <div></div>
+          <div class="screen-empty" id="raw-empty"><span>No collector has been allocated yet.</span></div>
         </div>
       </section>
     </main>
-
-    <footer>
-      <div class="footer-metric"><span class="footer-label">RNG state</span><span class="footer-value" id="ft-init">Not initialized</span></div>
-      <div class="footer-metric" title="Whether a generate or benchmark worker is active."><span class="footer-label">Worker state</span><span class="footer-value" id="ft-busy">Idle</span></div>
-      <div class="footer-metric" title="Most recently delivered generate or benchmark result."><span class="footer-label">Last operation</span><span class="footer-value" id="ft-operation">None</span></div>
-      <div class="footer-metric" title="Aggregate bytes per second from health telemetry."><span class="footer-label">Throughput</span><span class="footer-value" id="ft-throughput">0.00 MB/s</span></div>
-      <div class="footer-metric"><span class="footer-label">Last error</span><span class="footer-value" id="ft-error">0 (OK)</span></div>
-      <div class="footer-metric" title="Jitter range and standard deviation from the current capture."><span class="footer-label">Jitter diagnostics</span><span class="footer-value" id="ft-jitter">No samples</span></div>
-      <div class="footer-metric" title="Longest measured pipeline stage."><span class="footer-label">Pipeline bottleneck</span><span class="footer-value" id="ft-bottleneck">No capture</span></div>
-      <div class="footer-metric clickable" id="ft-hex-container" title="Click to copy complete hex sample"><span class="footer-label">Hex sample preview <span id="ft-hex-copy-indicator" class="copy-indicator">(Copied!)</span></span><span class="footer-value hex-value" id="ft-hex">No sample generated</span></div>
-    </footer>
   </div>
 
+  <div class="tip" id="tip" role="tooltip" hidden></div>
+  <div class="sr-only" id="announcer" aria-live="polite"></div>
+
   <script>
-    let currentTab = 'oscilloscope';
-    let latestTelemetry = null;
-    let pendingRender = null;
-    let renderFrame = 0;
-    let frozenTelemetry = null;
-    let scopeAutoscale = true;
-    let scopeScale = null;
-    let lastActionFailed = false;
-    let latestFullHex = '';
-    let hexCopyTimeout = null;
+  (() => {
+    'use strict';
 
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(item => item.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(item => item.classList.remove('active'));
-        btn.classList.add('active');
-        currentTab = btn.dataset.tab;
-        document.getElementById(`view-${currentTab}`).classList.add('active');
-        resizeCanvases();
-        if (latestTelemetry) scheduleRender(latestTelemetry);
-      });
-    });
+    const $ = id => document.getElementById(id);
+    const host = window.chrome && window.chrome.webview ? window.chrome.webview : null;
+    const send = msg => { if (host) host.postMessage(msg); };
 
-    const btnGenerate = document.getElementById('btn-generate');
-    const btnBenchmark = document.getElementById('btn-benchmark');
-    const btnCancel = document.getElementById('btn-cancel');
-    const btnScopeAutoscale = document.getElementById('scope-autoscale');
-    const btnScopeFreeze = document.getElementById('scope-freeze');
-    const btnScopeReset = document.getElementById('scope-reset');
+    /* rng_wrapper.h status codes, in words a user can act on. */
+    const RESULT_TEXT = {
+      0: 'OK',
+      '-1001': 'Startup self-test failed',
+      '-1002': 'Out of memory',
+      '-1003': 'Collector not initialised',
+      '-1004': 'Collector returned fewer bytes than asked',
+      '-1005': 'Value out of range',
+      '-1006': 'Collector reported an error',
+      '-1007': 'Another job is running',
+      '-1008': 'Collector already running',
+      '-2001': 'Stopped'
+    };
+    const CANCELLED = -2001;
+    const resultText = code => RESULT_TEXT[code] || `Error ${code}`;
 
-    btnGenerate.addEventListener('click', () => {
-      const bytes = parseInt(document.getElementById('input-generate-bytes').value, 10) || 512;
-      window.chrome.webview.postMessage({ action: 'generate', bytes: bytes });
-    });
-    btnBenchmark.addEventListener('click', () => {
-      const bytes = parseInt(document.getElementById('input-bench-bytes').value, 10) || 1024;
-      const iter = parseInt(document.getElementById('input-bench-iter').value, 10) || 1000;
-      window.chrome.webview.postMessage({ action: 'benchmark', bytesPerCall: bytes, iterations: iter });
-    });
-    btnCancel.addEventListener('click', () => window.chrome.webview.postMessage({ action: 'cancelBenchmark' }));
-    btnScopeAutoscale.addEventListener('click', () => {
-      scopeAutoscale = !scopeAutoscale;
-      btnScopeAutoscale.classList.toggle('active', scopeAutoscale);
-      btnScopeAutoscale.textContent = scopeAutoscale ? 'Autoscale' : 'Scale held';
-      if (scopeAutoscale) scopeScale = null;
-      if (latestTelemetry) scheduleRender(frozenTelemetry || latestTelemetry);
-    });
-    btnScopeFreeze.addEventListener('click', () => {
-      frozenTelemetry = frozenTelemetry ? null : structuredClone(latestTelemetry);
-      btnScopeFreeze.classList.toggle('active', !!frozenTelemetry);
-      btnScopeFreeze.textContent = frozenTelemetry ? 'Resume live' : 'Freeze';
-      if (latestTelemetry) scheduleRender(frozenTelemetry || latestTelemetry);
-    });
-    btnScopeReset.addEventListener('click', () => {
-      frozenTelemetry = null;
-      scopeAutoscale = true;
-      scopeScale = null;
-      btnScopeFreeze.classList.remove('active');
-      btnScopeFreeze.textContent = 'Freeze';
-      btnScopeAutoscale.classList.add('active');
-      btnScopeAutoscale.textContent = 'Autoscale';
-      if (latestTelemetry) scheduleRender(latestTelemetry);
-    });
+    const HEALTH_TESTS = [
+      ['rct', 'Repetition count'],
+      ['apt', 'Adaptive proportion'],
+      ['lag', 'Lag predictor'],
+      ['rctMemory', 'Memory repetition count']
+    ];
 
-    function resizeCanvases() {
-      ['canvas-oscilloscope', 'canvas-performance'].forEach(id => {
-        const canvas = document.getElementById(id);
-        if (canvas && canvas.offsetParent !== null) {
-          const width = Math.max(1, Math.floor(canvas.clientWidth * window.devicePixelRatio));
-          const height = Math.max(1, Math.floor(canvas.clientHeight * window.devicePixelRatio));
-          if (canvas.width !== width || canvas.height !== height) {
-            canvas.width = width;
-            canvas.height = height;
-          }
-        }
-      });
+    /* Screen palette: constant across themes, validated against the glass. */
+    const C = {
+      glass: '#0C1416', ink: '#D9E5E2', ink2: '#93A9A6', grid: 'rgba(147,169,166,.14)',
+      phosphor: '#22B06C', glow: 'rgba(34,176,108,.28)', violet: '#9275E6', amber: '#F2B04C',
+      bitOn: [63, 217, 138], bitOff: [12, 20, 22], unused: [6, 11, 12], byteHi: [166, 247, 201],
+      cool: [76, 141, 246], neutral: [38, 48, 51], warm: [240, 160, 48]
+    };
+    const FONT = '12px Bahnschrift, "Segoe UI", sans-serif';
+
+    const state = {
+      t: null,
+      view: 'overview',
+      libStatus: null,
+      libStatusLive: false,
+      sample: null,
+      sampleVersion: 0,
+      frozen: null,
+      autoscale: true,
+      scopeScale: null,
+      noiseMode: 'bits',
+      heatSource: 'session',
+      job: null,
+      lastFailure: null,
+      lastBench: null,
+      log: [],
+      logVersion: 0,
+      hover: {},
+      rendered: {},
+      cfgDirty: false
+    };
+
+    /* ---------------- formatting ---------------- */
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const nf = (v, d = 0) => Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+    function fmtBytes(b) {
+      b = Number(b) || 0;
+      const units = ['B', 'KiB', 'MiB', 'GiB'];
+      let i = 0;
+      while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+      return i ? `${nf(b, Number.isInteger(b) ? 0 : b < 10 ? 2 : 1)} ${units[i]}` : `${nf(b)} B`;
     }
-    const canvasResizeObserver = new ResizeObserver(() => {
-      resizeCanvases();
-      if (latestTelemetry) scheduleRender(latestTelemetry);
-    });
-    document.querySelectorAll('.canvas-wrap').forEach(element => canvasResizeObserver.observe(element));
-    window.addEventListener('resize', () => { resizeCanvases(); if (latestTelemetry) scheduleRender(latestTelemetry); });
-    setTimeout(resizeCanvases, 100);
+    function fmtTime(s) {
+      if (!(s > 0)) return '0 µs';
+      if (s < 1e-3) return `${nf(s * 1e6, s < 1e-5 ? 2 : 1)} µs`;
+      if (s < 1) return `${nf(s * 1e3, s < 1e-2 ? 3 : 2)} ms`;
+      return `${nf(s, 2)} s`;
+    }
+    const fmtUs = us => fmtTime(us * 1e-6);
+    const fmtRate = bps => `${fmtBytes(bps)}/s`;
+    function fmtClock(sec) {
+      sec = Math.floor(sec || 0);
+      const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60;
+      return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(s).padStart(2, '0')}`;
+    }
+    const fmtP = p => p == null ? '—' : p < 0.0001 ? '< 0.0001' : p.toFixed(4);
+    const plural = (n, word) => `${nf(n)} ${word}${n === 1 ? '' : 's'}`;
+    function setText(id, text) { const el = $(id); if (el && el.textContent !== text) el.textContent = text; }
+    function setState(el, s) { if (el && el.dataset.state !== s) el.dataset.state = s; }
+    function iconUse(name) { return `<svg class="icon"><use href="#i-${name}"/></svg>`; }
+    const ICON_FOR = { pass: 'pass', warn: 'warn', fail: 'fail', idle: 'idle', na: 'idle' };
 
-    window.chrome.webview.addEventListener('message', event => {
-      const data = event.data;
-      if (!data || data.type !== 'telemetry') return;
-      latestTelemetry = data;
-      updateControlsAndFooter(data);
-      scheduleRender(frozenTelemetry || data);
-    });
-
-    function updateControlsAndFooter(data) {
-      const isBusy = data.busy;
-      btnGenerate.disabled = isBusy;
-      btnBenchmark.disabled = isBusy;
-      btnCancel.disabled = !isBusy;
-      const badge = document.getElementById('status-badge');
-      const statusText = document.getElementById('status-text');
-      badge.className = `status ${isBusy ? 'busy' : (lastActionFailed ? 'error' : (data.health && data.health.initialized ? 'healthy' : ''))}`;
-      statusText.textContent = isBusy ? 'Running' : (lastActionFailed ? 'Operation failed' : (data.health && data.health.initialized ? 'Ready' : 'Not initialized'));
-
-      if (data.health) {
-        const initialized = data.health.initialized;
-        const state = document.getElementById('ft-init');
-        state.textContent = initialized ? 'Initialized' : 'Not initialized';
-        state.style.color = initialized ? 'var(--green)' : 'var(--red)';
-        document.getElementById('ft-busy').textContent = isBusy ? 'Running' : 'Idle';
-        document.getElementById('ft-throughput').textContent = `${((data.health.throughput_bytes_per_second || 0) / (1024 * 1024)).toFixed(2)} MB/s`;
-        document.getElementById('ft-error').textContent = data.health.last_error_code === 0 ? '0 (OK)' : data.health.last_error_code;
-      }
-      if (data.actionResult) {
-        lastActionFailed = data.actionResult.status !== 0;
-        const operation = `${data.actionResult.action || 'operation'} · ${data.actionResult.status === 0 ? 'OK' : `error ${data.actionResult.status}`}`;
-        document.getElementById('ft-operation').textContent = operation;
-        if (data.actionResult.action === 'generate') {
-          if (data.actionResult.status === 0 && data.actionResult.hex) {
-            latestFullHex = data.actionResult.hex;
-            const preview = latestFullHex.length > 64 ? `${latestFullHex.substring(0, 64)}...` : latestFullHex;
-            document.getElementById('ft-hex').textContent = preview;
-          } else {
-            latestFullHex = '';
-            document.getElementById('ft-hex').textContent = 'Generation failed';
-          }
-        } else if (data.actionResult.action === 'benchmark') {
-          latestFullHex = '';
-          document.getElementById('ft-hex').textContent = 'N/A (Benchmark mode)';
-        }
-      }
+    /* Numerical Recipes erfcc: fractional error < 1.2e-7. */
+    function erfc(x) {
+      const z = Math.abs(x), t = 1 / (1 + 0.5 * z);
+      const r = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 +
+        t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+      return x >= 0 ? r : 2 - r;
     }
 
-    function formatBytes(bytes) {
-      if (!bytes) return '0 B';
-      const sizes = ['B', 'KB', 'MB', 'GB'];
-      const index = Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-      return `${parseFloat((bytes / Math.pow(1024, index)).toFixed(2))} ${sizes[index]}`;
+    function describe(a) {
+      const n = a.length;
+      const sorted = Array.from(a).sort((x, y) => x - y);
+      let sum = 0;
+      for (const v of a) sum += v;
+      const mean = sum / n;
+      let sq = 0;
+      for (const v of a) sq += (v - mean) * (v - mean);
+      const q = f => sorted[Math.min(n - 1, Math.floor(n * f))];
+      return {
+        n, mean, min: sorted[0], max: sorted[n - 1], sd: Math.sqrt(sq / n),
+        median: n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2,
+        p95: q(0.95)
+      };
     }
 
-    function scheduleRender(data) {
-      pendingRender = data;
-      if (renderFrame) return;
-      renderFrame = requestAnimationFrame(() => {
-        renderFrame = 0;
-        if (pendingRender) renderCurrentView(pendingRender);
-      });
-    }
-
-    function renderCurrentView(data) {
-      if (currentTab === 'oscilloscope') renderOscilloscope(data.jitter || []);
-      else if (currentTab === 'performance') renderPerformance(data.history || {}, data.health || {});
-      else renderTimeline(data.timeline);
-    }
-
-    function getCanvasContext(canvas) {
-      const ctx = canvas.getContext('2d');
-      const ratio = window.devicePixelRatio || 1;
-      const width = canvas.width / ratio;
-      const height = canvas.height / ratio;
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-      return { ctx, width, height };
-    }
-
-    function niceScale(min, max, desiredTicks = 5) {
+    function niceScale(min, max, ticks = 5) {
       const range = Math.max(max - min, Number.EPSILON);
-      const rawStep = range / desiredTicks;
-      const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
-      const normalized = rawStep / magnitude;
-      const niceNormalized = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
-      const step = niceNormalized * magnitude;
+      const raw = range / ticks;
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const norm = raw / mag;
+      const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
       return { min: Math.floor(min / step) * step, max: Math.ceil(max / step) * step, step };
     }
 
-    function drawChartGrid(ctx, width, height, plot, yMin, yMax, formatter, xTickFormatter) {
-      ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = '#10161c'; ctx.fillRect(0, 0, width, height);
-      ctx.font = '10px Cascadia Mono, Consolas, monospace'; ctx.textBaseline = 'middle'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.strokeStyle = 'rgba(159, 178, 192, .12)'; ctx.fillStyle = '#81909d'; ctx.lineWidth = 1;
-      const scale = niceScale(yMin, yMax);
-      const horizontalLines = Math.max(1, Math.round((scale.max - scale.min) / scale.step));
-      for (let line = 0; line <= horizontalLines; line++) {
-        const y = plot.top + (plot.height * line / horizontalLines);
-        const value = scale.max - ((scale.max - scale.min) * line / horizontalLines);
-        ctx.beginPath(); ctx.moveTo(plot.left, y + .5); ctx.lineTo(plot.left + plot.width, y + .5); ctx.stroke();
-        ctx.fillText(formatter(value), 8, y);
+    /* A tick formatter with one unit for the whole axis, picked from its span. */
+    function timeAxis(scale, toSeconds) {
+      const top = Math.max(Math.abs(scale.max), Math.abs(scale.min)) * toSeconds;
+      const [unit, k] = top >= 1 ? ['s', 1] : top >= 1e-3 ? ['ms', 1e3] : ['µs', 1e6];
+      const dec = clamp(-Math.floor(Math.log10(scale.step * toSeconds * k) + 1e-9), 0, 3);
+      return v => `${nf(v * toSeconds * k, dec)} ${unit}`;
+    }
+
+    function mix(a, b, f) {
+      return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)},${Math.round(a[1] + (b[1] - a[1]) * f)},${Math.round(a[2] + (b[2] - a[2]) * f)})`;
+    }
+
+    /* ---------------- canvas plotting ---------------- */
+    function setupCanvas(cv) {
+      const r = cv.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return null;
+      const dpr = window.devicePixelRatio || 1;
+      const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+      if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+      const ctx = cv.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, w: r.width, h: r.height };
+    }
+
+    /*
+     * One plot routine for every time-series screen: recessive solid grid,
+     * left value axis, bottom index axis, an optional crosshair. The chart
+     * itself draws through cfg.draw with the X/Y mappers.
+     */
+    function drawPlot(id, cfg) {
+      const cv = $(id);
+      const s = setupCanvas(cv);
+      if (!s) return;
+      const { ctx, w, h } = s;
+      ctx.fillStyle = C.glass;
+      ctx.fillRect(0, 0, w, h);
+      const plot = { x: 64, y: 10, w: Math.max(1, w - 64 - (cfg.padRight || 18)), h: Math.max(1, h - 10 - 26) };
+      const n = cfg.n;
+      const scale = cfg.scale;
+      const X = i => plot.x + (n <= 1 ? plot.w / 2 : plot.w * i / (n - 1));
+      const Y = v => plot.y + plot.h - (v - scale.min) / (scale.max - scale.min || 1) * plot.h;
+      cv._plot = plot; cv._n = n; cv._tip = cfg.tip; cv._X = X;
+
+      ctx.font = FONT;
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = C.grid;
+      ctx.fillStyle = C.ink2;
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'right';
+      const lines = Math.max(1, Math.round((scale.max - scale.min) / scale.step));
+      for (let k = 0; k <= lines; k++) {
+        const v = scale.min + scale.step * k;
+        const y = Math.round(Y(v)) + .5;
+        ctx.beginPath(); ctx.moveTo(plot.x, y); ctx.lineTo(plot.x + plot.w, y); ctx.stroke();
+        ctx.fillText(cfg.yFmt(v), plot.x - 10, y);
       }
-      for (let line = 0; line <= 5; line++) {
-        const x = plot.left + (plot.width * line / 5);
-        ctx.beginPath(); ctx.moveTo(x + .5, plot.top); ctx.lineTo(x + .5, plot.top + plot.height); ctx.stroke();
-        if (xTickFormatter) { ctx.textAlign = line === 0 ? 'left' : line === 5 ? 'right' : 'center'; ctx.fillText(xTickFormatter(line / 5), x, plot.top + plot.height + 18); }
-      }
-      ctx.textAlign = 'left';
-      ctx.strokeStyle = '#43515e'; ctx.strokeRect(plot.left + .5, plot.top + .5, plot.width, plot.height);
-      return scale;
-    }
-
-    function renderOscilloscope(jitter) {
-      const { ctx, width, height } = getCanvasContext(document.getElementById('canvas-oscilloscope'));
-      if (!width || !height) return;
-      const plot = { left: 76, top: 22, width: Math.max(1, width - 96), height: Math.max(1, height - 58) };
-      const n = jitter.length;
-      document.getElementById('scope-count').textContent = n;
-      document.getElementById('scope-capture-meta').textContent = n ? `${n} samples · not timestamped` : 'Not timestamped';
-      if (!n) { drawChartGrid(ctx, width, height, plot, 0, 1, value => `${value.toFixed(2)} µs`, fraction => `-${Math.round((1 - fraction) * 255)}`); return; }
-      let min = jitter[0], max = jitter[0], sum = 0;
-      jitter.forEach(value => { min = Math.min(min, value); max = Math.max(max, value); sum += value; });
-      const mean = sum / n;
-      const sorted = [...jitter].sort((a, b) => a - b);
-      const median = n % 2 ? sorted[Math.floor(n / 2)] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
-      const p95 = sorted[Math.min(n - 1, Math.floor(n * .95))];
-      const stddev = Math.sqrt(jitter.reduce((total, value) => total + Math.pow(value - mean, 2), 0) / n);
-      document.getElementById('scope-min').textContent = `${min.toFixed(4)} µs`;
-      document.getElementById('scope-max').textContent = `${max.toFixed(4)} µs`;
-      document.getElementById('scope-median').textContent = `${median.toFixed(4)} µs`;
-      document.getElementById('scope-p95').textContent = `${p95.toFixed(4)} µs`;
-      document.getElementById('scope-stddev').textContent = `${stddev.toFixed(4)} µs`;
-      document.getElementById('scope-current-average').textContent = `${jitter[n - 1].toFixed(4)} / ${mean.toFixed(4)} µs`;
-      document.getElementById('ft-jitter').textContent = `${min.toFixed(3)}–${max.toFixed(3)} µs · σ ${stddev.toFixed(3)}`;
-      const padding = Math.max((max - min) * .14, .01);
-      const rawLow = Math.max(0, min - padding), rawHigh = max + padding;
-      if (scopeAutoscale || !scopeScale) scopeScale = niceScale(rawLow, rawHigh);
-      const displayScale = scopeScale;
-      const low = displayScale.min, high = displayScale.max, range = Math.max(high - low, .01);
-      drawChartGrid(ctx, width, height, plot, low, high, value => `${value.toFixed(2)} µs`, fraction => `-${Math.round((1 - fraction) * Math.max(n - 1, 1))}`);
-      const point = (value, index) => ({ x: plot.left + (plot.width * index / Math.max(n - 1, 1)), y: plot.top + plot.height - ((value - low) / range) * plot.height });
-      const medianY = point(median, 0).y;
-      ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(99, 186, 136, .65)'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(plot.left, medianY); ctx.lineTo(plot.left + plot.width, medianY); ctx.stroke(); ctx.setLineDash([]);
-      const gradient = ctx.createLinearGradient(0, plot.top, 0, plot.top + plot.height);
-      gradient.addColorStop(0, 'rgba(82, 185, 212, .22)'); gradient.addColorStop(1, 'rgba(82, 185, 212, 0)');
-      ctx.beginPath(); jitter.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-      ctx.lineTo(plot.left + plot.width, plot.top + plot.height); ctx.lineTo(plot.left, plot.top + plot.height); ctx.closePath(); ctx.fillStyle = gradient; ctx.fill();
-      ctx.beginPath(); jitter.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-      ctx.strokeStyle = 'rgba(82, 185, 212, .16)'; ctx.lineWidth = 4; ctx.stroke();
-      ctx.strokeStyle = '#78c8de'; ctx.lineWidth = 1.25; ctx.stroke();
-      ctx.fillStyle = '#81909d'; ctx.font = '10px Segoe UI, sans-serif'; ctx.fillText('Sample sequence', plot.left, height - 13);
-    }
-
-    function renderPerformance(history, health) {
-      document.getElementById('perf-throughput').textContent = `${(health.throughput_bytes_per_second ? health.throughput_bytes_per_second / (1024 * 1024) : 0).toFixed(2)} MB/s`;
-      document.getElementById('perf-latency').textContent = `${((health.average_latency_seconds || 0) * 1000).toFixed(3)} ms`;
-      document.getElementById('perf-total-bytes').textContent = formatBytes(health.total_bytes_generated || 0);
-      document.getElementById('perf-calls').textContent = `${(health.generation_call_count || 0).toLocaleString()} / ${health.failure_count || 0}`;
-      document.getElementById('perf-failures').textContent = health.failure_count || 0;
-      const { ctx, width, height } = getCanvasContext(document.getElementById('canvas-performance'));
-      if (!width || !height) return;
-      const plot = { left: 76, top: 22, width: Math.max(1, width - 96), height: Math.max(1, height - 58) };
-      const count = Math.min(history.count || 0, (history.bytes || []).length, (history.durations || []).length);
-      if (!count) {
-        drawChartGrid(ctx, width, height, plot, 0, 1, value => `${value.toFixed(3)} ms`, fraction => `-${Math.round((1 - fraction) * 1)}`);
-        return;
-      }
-      const latency = Array.from({ length: count }, (_, index) => (history.durations[index] || 0) * 1000);
-      const rollingWindow = Math.min(12, Math.max(3, Math.floor(count / 8)));
-      const rollingAverage = latency.map((value, index) => {
-        const start = Math.max(0, index - rollingWindow + 1);
-        const subset = latency.slice(start, index + 1);
-        return subset.reduce((sum, item) => sum + item, 0) / subset.length;
-      });
-      const throughput = Array.from({ length: count }, (_, index) => {
-        const seconds = history.durations[index] > 0 ? history.durations[index] : 0;
-        return seconds ? (history.bytes[index] / (1024 * 1024)) / seconds : 0;
-      });
-      const nonZeroThroughput = throughput.filter(value => value > 0);
-      const peakThroughput = nonZeroThroughput.length ? Math.max(...nonZeroThroughput) : 0;
-      const lowThroughput = nonZeroThroughput.length ? Math.min(...nonZeroThroughput) : 0;
-      const rollingLatest = rollingAverage[rollingAverage.length - 1];
-      const latencyMean = latency.reduce((sum, value) => sum + value, 0) / latency.length;
-      const latencyStd = Math.sqrt(latency.reduce((sum, value) => sum + Math.pow(value - latencyMean, 2), 0) / latency.length);
-      const trendBase = rollingAverage[Math.max(0, rollingAverage.length - Math.min(8, rollingAverage.length))];
-      const trendDelta = rollingLatest - trendBase;
-      const trend = Math.abs(trendDelta) <= Math.max(0.001, trendBase * .03) ? 'Stable' : trendDelta > 0 ? 'Rising latency' : 'Falling latency';
-      document.getElementById('perf-throughput-range').textContent = `${lowThroughput.toFixed(2)}–${peakThroughput.toFixed(2)} MB/s`;
-      document.getElementById('perf-latency-diagnostics').textContent = `${rollingLatest.toFixed(3)} ms · σ ${latencyStd.toFixed(3)}`;
-      document.getElementById('perf-latency-trend').textContent = trend;
-      const values = latency.concat(rollingAverage);
-      const rawLow = Math.min(...values), rawHigh = Math.max(...values);
-      const padding = Math.max((rawHigh - rawLow) * .18, Math.max(rawHigh, .001) * .08, .001);
-      const displayScale = niceScale(Math.max(0, rawLow - padding), rawHigh + padding);
-      const low = displayScale.min, high = displayScale.max;
-      drawChartGrid(ctx, width, height, plot, low, high, value => `${value.toFixed(3)} ms`, fraction => `-${Math.round((1 - fraction) * Math.max(count - 1, 1))}`);
-      const range = Math.max(high - low, .000001);
-      const point = (value, index) => ({ x: plot.left + (plot.width * index / Math.max(count - 1, 1)), y: plot.top + plot.height - ((value - low) / range) * plot.height });
-      const fill = ctx.createLinearGradient(0, plot.top, 0, plot.top + plot.height);
-      fill.addColorStop(0, 'rgba(82, 185, 212, .18)'); fill.addColorStop(1, 'rgba(82, 185, 212, 0)');
-      ctx.beginPath(); latency.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-      ctx.lineTo(plot.left + plot.width, plot.top + plot.height); ctx.lineTo(plot.left, plot.top + plot.height); ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
-      ctx.beginPath(); latency.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-      ctx.strokeStyle = '#75bdd1'; ctx.lineWidth = 1.15; ctx.stroke();
-      ctx.beginPath(); rollingAverage.forEach((value, index) => { const p = point(value, index); index ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
-      ctx.strokeStyle = '#d8a85a'; ctx.lineWidth = 1.8; ctx.stroke();
-      const anomalies = latency.map((value, index) => value > rollingAverage[index] * 1.25 ? index : -1).filter(index => index >= 0);
-      ctx.fillStyle = '#d8a85a'; anomalies.forEach(index => { const p = point(latency[index], index); ctx.beginPath(); ctx.arc(p.x, p.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
-      ctx.fillStyle = '#81909d'; ctx.font = '10px Segoe UI, sans-serif'; ctx.fillText('Raw latency', plot.left, height - 13);
-      ctx.fillStyle = '#d8a85a'; ctx.fillText('Rolling average', plot.left + 76, height - 13);
-    }
-
-    const STAGE_DESCRIPTIONS = {
-      request: 'Worker thread setup and request initialization.',
-      entropy: 'Hardware execution timing entropy harvesting loop.',
-      processing: 'Hex preview string formatting and health metrics recording.',
-      serialization: 'UTF-8 JSON telemetry serialization for WebView2 bridge.'
-    };
-
-    function renderTimeline(timeline) {
-      const status = document.getElementById('tl-status');
-      if (!timeline) {
-        status.textContent = 'Idle';
-        document.getElementById('tl-total-duration').textContent = '0.000 ms';
-        document.getElementById('tl-request-time').textContent = 'N/A';
-        document.getElementById('tl-bottleneck').textContent = 'N/A';
-        document.getElementById('tl-serialization-cost').textContent = '0.0%';
-        document.getElementById('tl-analysis-badge').textContent = 'No capture';
-        document.getElementById('tl-analysis-bottleneck').textContent = 'No capture data available';
-        document.getElementById('tl-analysis-note').textContent = 'Run a generation or benchmark to inspect the measured execution pipeline.';
-        document.getElementById('timeline-stage-analysis').replaceChildren();
-        updateTimelineScale(0);
-        return;
-      }
-      const request = timeline.request || { start: 0, duration: 0 };
-      const entropy = timeline.entropy || { start: 0, duration: 0 };
-      const processing = timeline.processing || { start: 0, duration: 0 };
-      const serialization = timeline.serialization || { start: 0, duration: 0 };
-      const total = Math.max((serialization.start + serialization.duration) - request.start, .000001);
-
-      status.textContent = 'Captured';
-      document.getElementById('tl-total-duration').textContent = `${(total * 1000).toFixed(3)} ms`;
-      document.getElementById('tl-request-time').textContent = `T0 ${request.start.toFixed(4)} s`;
-
-      const stages = [
-        { key: 'request', name: 'Request dispatch', timing: request },
-        { key: 'entropy', name: 'Entropy collection', timing: entropy },
-        { key: 'processing', name: 'Result processing', timing: processing },
-        { key: 'serialization', name: 'Telemetry serialization', timing: serialization }
-      ];
-
-      const bottleneck = stages.reduce((longest, stage) => stage.timing.duration > longest.timing.duration ? stage : longest, stages[0]);
-      const bottleneckPercent = bottleneck.timing.duration / total * 100;
-      const serializationPercent = serialization.duration / total * 100;
-
-      document.getElementById('tl-bottleneck').textContent = bottleneck.name;
-      document.getElementById('tl-serialization-cost').textContent = `${serializationPercent.toFixed(2)}%`;
-      document.getElementById('tl-analysis-badge').textContent = `Bottleneck: ${bottleneck.name}`;
-      document.getElementById('tl-analysis-bottleneck').textContent = `${bottleneck.name} · ${bottleneckPercent.toFixed(1)}% share (${formatPipelineTime(bottleneck.timing.duration)})`;
-      document.getElementById('tl-analysis-note').textContent = `${bottleneck.name} is the primary pipeline bottleneck, consuming ${formatPipelineTime(bottleneck.timing.duration)} (${bottleneckPercent.toFixed(1)}%) of total request execution time. Microsecond-scale stages executed near-instantaneously without CPU blocking.`;
-      document.getElementById('ft-bottleneck').textContent = `${bottleneck.name} · ${bottleneckPercent.toFixed(1)}%`;
-
-      updateTimelineScale(total);
-      stages.forEach(stage => updateStageTrack(`bar-${stage.key}`, `tl-time-${stage.key}`, stage.timing.start - request.start, stage.timing.duration, total, stage));
-      renderTimelineAnalysis(stages, request.start, total, bottleneck.key);
-    }
-
-    function formatPipelineTime(seconds) {
-      return seconds >= .001 ? `${(seconds * 1000).toFixed(3)} ms` : `${(seconds * 1e6).toFixed(1)} µs`;
-    }
-
-    function renderTimelineAnalysis(stages, baseTime, total, bottleneckKey) {
-      const container = document.getElementById('timeline-stage-analysis');
-      container.replaceChildren();
-      stages.forEach((stage, idx) => {
-        const isBottleneck = stage.key === bottleneckKey;
-        const card = document.createElement('div');
-        card.className = `stage-card ${isBottleneck ? 'bottleneck' : ''}`;
-        card.title = `${stage.name}: start ${formatPipelineTime(stage.timing.start - baseTime)}, end ${formatPipelineTime(stage.timing.start + stage.timing.duration - baseTime)}, duration ${formatPipelineTime(stage.timing.duration)}.`;
-
-        const header = document.createElement('div');
-        header.className = 'stage-card-header';
-        const title = document.createElement('span');
-        title.className = 'stage-card-title';
-        title.textContent = `0${idx + 1}. ${stage.name}`;
-
-        const tag = document.createElement('span');
-        const rawShare = stage.timing.duration / total * 100;
-        if (isBottleneck) {
-          tag.className = 'stage-card-tag bottleneck';
-          tag.textContent = 'BOTTLENECK';
-        } else if (rawShare < 1.0) {
-          tag.className = 'stage-card-tag';
-          tag.textContent = 'MICROSECOND';
-        } else {
-          tag.className = 'stage-card-tag';
-          tag.textContent = 'COMPLETED';
+      if (n > 1 && cfg.xFmt) {
+        ctx.textBaseline = 'alphabetic';
+        const ticks = Math.min(4, n - 1);
+        for (let k = 0; k <= ticks; k++) {
+          const i = Math.round((n - 1) * k / ticks);
+          ctx.textAlign = k === 0 ? 'left' : k === ticks ? 'right' : 'center';
+          ctx.fillText(cfg.xFmt(i), X(i), plot.y + plot.h + 19);
         }
-        header.append(title, tag);
+      }
+      if (!n) return;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(plot.x - 4, plot.y - 4, plot.w + 8, plot.h + 8); ctx.clip();
+      cfg.draw({ ctx, X, Y, plot });
+      ctx.restore();
 
-        const data = document.createElement('div');
-        data.className = 'stage-card-data';
-        const rows = [
-          ['Start', formatPipelineTime(stage.timing.start - baseTime)],
-          ['End', formatPipelineTime(stage.timing.start + stage.timing.duration - baseTime)],
-          ['Duration', formatPipelineTime(stage.timing.duration)],
-          ['Share', rawShare < 0.01 ? '< 0.01%' : `${rawShare.toFixed(2)}%`]
-        ];
-        rows.forEach(([label, value]) => {
-          const left = document.createElement('span'); left.textContent = label;
-          const right = document.createElement('strong'); right.textContent = value;
-          data.append(left, right);
-        });
-
-        const desc = document.createElement('div');
-        desc.className = 'stage-card-desc';
-        desc.textContent = STAGE_DESCRIPTIONS[stage.key] || 'Pipeline execution stage.';
-
-        card.append(header, data, desc);
-        container.appendChild(card);
-      });
-    }
-
-    function updateTimelineScale(total) {
-      const scale = document.getElementById('timeline-scale');
-      scale.replaceChildren();
-      const targetTicks = Math.max(4, Math.min(8, Math.floor(scale.clientWidth / 115)) || 5);
-      scale.style.backgroundSize = `${100 / targetTicks}% 100%`;
-      for (let index = 0; index <= targetTicks; index++) {
-        const tick = document.createElement('span');
-        tick.style.left = `${index / targetTicks * 100}%`;
-        tick.textContent = `${(total * 1e6 * index / targetTicks).toFixed(index === 0 ? 0 : 1)} µs`;
-        scale.appendChild(tick);
+      const hi = state.hover[id];
+      if (hi != null && hi < n) {
+        const x = Math.round(X(hi)) + .5;
+        ctx.strokeStyle = 'rgba(217,229,226,.45)';
+        ctx.beginPath(); ctx.moveTo(x, plot.y); ctx.lineTo(x, plot.y + plot.h); ctx.stroke();
+        if (cfg.focus) {
+          const y = Y(cfg.focus(hi));
+          ctx.fillStyle = C.ink;
+          ctx.strokeStyle = C.glass;
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        }
       }
     }
 
-    function updateStageTrack(barId, timeId, offset, duration, total, stage) {
-      const leftPct = Math.max(0, Math.min(99, (offset / total) * 100));
-      const rawWidthPct = (duration / total) * 100;
-      /* Enforce minimum 1.5% visual bar width so microsecond-scale stages remain clearly visible & interactive */
-      const visualWidthPct = Math.max(1.5, Math.min(100 - leftPct, rawWidthPct));
+    function tracePath(ctx, values, X, Y) {
+      ctx.beginPath();
+      for (let i = 0; i < values.length; i++) {
+        const x = X(i), y = Y(values[i]);
+        if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+      }
+    }
 
-      const bar = document.getElementById(barId);
-      bar.style.left = `${leftPct.toFixed(3)}%`;
-      bar.style.width = `${visualWidthPct.toFixed(3)}%`;
+    function refLine(ctx, plot, y, label, above) {
+      ctx.strokeStyle = 'rgba(217,229,226,.38)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(plot.x, Math.round(y) + .5); ctx.lineTo(plot.x + plot.w, Math.round(y) + .5); ctx.stroke();
+      ctx.font = FONT;
+      const tw = ctx.measureText(label).width;
+      const ty = above ? y - 10 : y + 10;
+      ctx.fillStyle = 'rgba(12,20,22,.85)';
+      ctx.fillRect(plot.x + plot.w - tw - 10, ty - 8, tw + 8, 16);
+      ctx.fillStyle = C.ink;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, plot.x + plot.w - 6, ty);
+    }
 
-      const durationText = formatPipelineTime(duration);
-      const percentText = rawWidthPct < 0.01 ? '< 0.01%' : `${rawWidthPct.toFixed(2)}%`;
-      const isMicro = rawWidthPct < 1.0;
+    const tip = $('tip');
+    function showTip(lines, x, y) {
+      if (!lines) return hideTip();
+      tip.replaceChildren(...lines.map((l, i) => {
+        const div = document.createElement('div');
+        if (i === 0) { const b = document.createElement('b'); b.textContent = l; div.append(b); } else div.textContent = l;
+        return div;
+      }));
+      tip.hidden = false;
+      const r = tip.getBoundingClientRect();
+      tip.style.left = `${clamp(x + 14, 4, window.innerWidth - r.width - 4)}px`;
+      tip.style.top = `${clamp(y - r.height - 12, 4, window.innerHeight - r.height - 4)}px`;
+    }
+    function hideTip() { tip.hidden = true; }
 
-      if (isMicro) {
-        bar.classList.add('microsecond-stage');
+    function attachHover(id) {
+      const cv = $(id);
+      cv.addEventListener('pointermove', e => {
+        const p = cv._plot, n = cv._n;
+        if (!p || !n || !cv._tip) return;
+        const r = cv.getBoundingClientRect();
+        const i = clamp(Math.round((e.clientX - r.left - p.x) / p.w * (n - 1)), 0, n - 1);
+        if (state.hover[id] !== i) { state.hover[id] = i; requestRender(); }
+        showTip(cv._tip(i), e.clientX, e.clientY);
+      });
+      cv.addEventListener('pointerleave', () => { delete state.hover[id]; hideTip(); requestRender(); });
+    }
+    ['cv-scope', 'cv-lat', 'cv-thr', 'cv-walk'].forEach(attachHover);
+
+    /* ---------------- render scheduling ---------------- */
+    let raf = 0, forceNext = false;
+    function requestRender(force) {
+      if (force) forceNext = true;
+      if (!raf) raf = requestAnimationFrame(render);
+    }
+    function changed(key, sig, force) {
+      if (!force && state.rendered[key] === sig) return false;
+      state.rendered[key] = sig;
+      return true;
+    }
+    const sigArr = a => a && a.length ? `${a.length}:${a[0]}:${a[a.length >> 1]}:${a[a.length - 1]}` : '0';
+    function render() {
+      raf = 0;
+      const force = forceNext;
+      forceNext = false;
+      ({ overview: renderOverview, sample: renderSample, performance: renderPerformance, collector: renderCollector })[state.view](force);
+    }
+
+    /* ---------------- telemetry ---------------- */
+    function onTelemetry(d) {
+      if (!d || d.type !== 'telemetry') return;
+      state.t = d;
+      const st = d.library && d.library.status;
+      state.libStatusLive = !!st;
+      if (st) state.libStatus = st;
+      if (d.actionResult) handleResult(d.actionResult);
+      updateChrome(d);
+      requestRender();
+    }
+
+    function handleResult(r) {
+      const ok = r.status === 0;
+      const stopped = r.status === CANCELLED;
+      const rejected = r.status === -1007 || r.status === -1005;
+      let detail = '', say = '';
+
+      if (r.action === 'generate') {
+        if (ok && r.hex) {
+          const bytes = new Uint8Array(r.hex.length >> 1);
+          for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(r.hex.substr(i * 2, 2), 16);
+          state.sample = { bytes, hex: r.hex, stats: r.entropyStats, duration: r.duration, at: new Date(), walk: null };
+          state.sampleVersion++;
+          detail = `${fmtBytes(bytes.length)} in ${fmtTime(r.duration)}`;
+          say = `Generated ${detail}.`;
+        } else if (stopped) {
+          detail = `Stopped after ${fmtBytes(r.bytes)}`;
+        } else {
+          detail = resultText(r.status);
+        }
+      } else if (r.action === 'benchmark') {
+        if (ok || stopped) {
+          state.lastBench = r;
+          const total = r.bytes * r.iterations;
+          detail = `${plural(r.iterations, 'call')} of ${fmtBytes(r.bytes)} in ${fmtTime(r.duration)}, ${fmtRate(r.duration > 0 ? total / r.duration : 0)}`;
+          if (r.initSeconds > 0) detail += `, setup ${fmtTime(r.initSeconds)}`;
+          say = `Benchmark ${stopped ? 'stopped' : 'finished'}: ${detail}.`;
+        } else {
+          detail = resultText(r.status);
+        }
+      } else if (r.action === 'configure') {
+        const msg = $('cfg-msg');
+        if (ok) {
+          state.cfgDirty = false;
+          msg.textContent = 'Applied. The next run starts a collector with these settings.';
+          setState(msg, 'pass');
+          detail = 'Collector released, new settings stored';
+        } else {
+          msg.textContent = r.status === -1007 ? 'A job is running. Stop it or let it finish, then apply again.'
+            : r.status === -1005 ? 'Oversampling rate must be a whole number from 0 to 65,535.' : resultText(r.status);
+          setState(msg, 'fail');
+          detail = resultText(r.status);
+        }
+      }
+
+      if (r.action === state.job?.action) state.job = null;
+      if (r.action !== 'configure') {
+        if (ok || stopped) state.lastFailure = null;
+        else if (!rejected) state.lastFailure = { action: r.action, status: r.status };
+      }
+      addLog(r.action, ok ? 'pass' : stopped ? 'idle' : 'fail', ok ? 'Done' : stopped ? 'Stopped' : rejected ? 'Refused' : 'Failed', detail);
+      if (say) $('announcer').textContent = say;
+    }
+
+    function addLog(action, st, result, detail) {
+      state.log.unshift({ time: new Date(), action, st, result, detail });
+      if (state.log.length > 100) state.log.length = 100;
+      state.logVersion++;
+    }
+
+    function hasLibFailure(kind) {
+      const hf = state.libStatus && state.libStatus.healthFailure;
+      return !!hf && HEALTH_TESTS.some(([k]) => hf[k] && hf[k][kind]);
+    }
+
+    function updateChrome(d) {
+      const busy = !!d.busy;
+      const h = d.health || {};
+      $('btn-generate').disabled = busy;
+      $('btn-benchmark').disabled = busy;
+      $('btn-stop').hidden = !busy;
+      $('scope-live').hidden = !busy;
+      document.querySelectorAll('[data-action="generate"]').forEach(b => { b.disabled = busy; });
+
+      let lamp, text, progress = null;
+      if (busy) {
+        lamp = 'warn';
+        const job = state.job;
+        if (job && job.action === 'generate') {
+          progress = clamp((h.total_bytes_generated - job.base) / job.target, 0, 1);
+          text = `Generating ${fmtBytes(job.target)}, ${Math.round(progress * 100)}%`;
+        } else if (job && job.action === 'benchmark') {
+          const done = clamp(h.generation_call_count - job.base, 0, job.target);
+          progress = done / job.target;
+          text = `Benchmark, ${nf(done)} of ${plural(job.target, 'call')}`;
+        } else {
+          text = 'Running';
+        }
+      } else if (hasLibFailure('permanent')) {
+        lamp = 'fail'; text = 'Permanent health-test failure';
+      } else if (state.lastFailure) {
+        lamp = 'fail';
+        text = `${state.lastFailure.action === 'generate' ? 'Generate' : 'Benchmark'} failed: ${resultText(state.lastFailure.status)}`;
       } else {
-        bar.classList.remove('microsecond-stage');
+        lamp = 'pass'; text = 'Ready';
       }
+      setState($('lamp'), lamp);
+      setText('job-text', text);
+      $('job-bar').hidden = progress == null;
+      if (progress != null) $('job-bar').firstElementChild.style.width = `${(progress * 100).toFixed(1)}%`;
 
-      document.getElementById(timeId).innerHTML = `${durationText} &nbsp;&middot;&nbsp; ${percentText}${isMicro ? ' <span class="track-micro-tag">(microsecond stage)</span>' : ''}`;
-      bar.title = `${stage.name}\nMeasured Duration: ${durationText} (${percentText} of total request)\nStart Offset: ${formatPipelineTime(offset)} into request\n${isMicro ? 'Note: Visual bar rendered with minimum width for clarity.' : ''}`;
+      setText('uptime', `Session ${fmtClock(d.uptime)}`);
+      if (d.library && d.library.version) setText('lib-version', `library ${d.library.version}`);
+
+      const s = d.settings;
+      if (s) {
+        setText('kv-osr', s.osr ? String(s.osr) : 'Automatic');
+        setText('kv-fips', s.forceFips ? 'On' : 'Off');
+        setText('kv-ntg1', s.ntg1 ? 'On' : 'Off');
+        setText('kv-mem', s.disableMemoryAccess ? 'Off' : 'On');
+        if (!state.cfgDirty) fillConfigForm(s);
+      }
+      $('btn-apply').disabled = busy;
+      updateHealthRail(h);
     }
 
-    function downloadBlob(filename, type, content) {
-      const blob = new Blob([content], { type });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url; link.download = filename; link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+    function updateHealthRail(h) {
+      const st = state.libStatus;
+      const hf = st && st.healthFailure;
+      const list = $('health-list');
+      if (!list.children.length) {
+        list.innerHTML = HEALTH_TESTS.map(([k, name]) =>
+          `<li data-key="${k}" data-state="idle">${iconUse('idle')}<span>${name}</span><span class="state">Not run</span></li>`).join('');
+      }
+      for (const li of list.children) {
+        const f = hf && hf[li.dataset.key];
+        li.hidden = !!hf && !f;
+        const s = !f ? 'idle' : f.permanent ? 'fail' : f.intermittent ? 'warn' : 'pass';
+        if (li.dataset.state !== s) {
+          li.dataset.state = s;
+          li.querySelector('use').setAttribute('href', `#i-${ICON_FOR[s]}`);
+          li.querySelector('.state').textContent = !f ? 'Not run' : f.permanent ? 'Permanent' : f.intermittent ? 'Intermittent' : 'Pass';
+        }
+      }
+      setText('hl-reinit', st ? nf(st.reinitializations) : '0');
+      setText('hl-fips', nf(h.fips_failure_count || 0));
+      setText('health-note', !st ? 'The library runs these tests on its raw noise source once a collector exists. Generate a sample to start one.'
+        : state.libStatusLive ? 'Reported by the library for the current collector.'
+        : 'Last report. The collector was released after a benchmark or settings change, or is busy.');
     }
 
-    function csvCell(value) {
-      return `"${String(value ?? '').replaceAll('"', '""')}"`;
+    /* ---------------- Overview ---------------- */
+    function renderOverview(force) {
+      const t = state.t || {};
+      const jitter = state.frozen || t.jitter || [];
+      if (changed('scope', `${sigArr(jitter)}|${state.autoscale}|${state.hover['cv-scope']}`, force)) renderScope(jitter);
+      if (changed('noise', `${state.sampleVersion}|${state.noiseMode}`, force)) renderNoise();
+      const sess = t.session || {};
+      const statusSig = state.libStatus ? JSON.stringify(state.libStatus.healthFailure) : '';
+      if (changed('verdict', `${state.sampleVersion}|${sess.byteCount}|${statusSig}|${state.lastFailure && state.lastFailure.status}`, force)) renderVerdict();
+      renderStreamChecks(t.jitterHealth);
     }
 
-    document.getElementById('export-json').addEventListener('click', () => {
-      if (!latestTelemetry) return;
-      downloadBlob('jitterentropy-telemetry.json', 'application/json', JSON.stringify(frozenTelemetry || latestTelemetry, null, 2));
-    });
-
-    document.getElementById('export-csv').addEventListener('click', () => {
-      if (!latestTelemetry) return;
-      const data = frozenTelemetry || latestTelemetry;
-      const rows = [['record_type', 'index_or_stage', 'timestamp_seconds', 'bytes', 'duration_seconds', 'throughput_mb_s', 'start_seconds', 'end_seconds', 'percent_total']];
-      const history = data.history || {};
-      const count = Math.min(history.count || 0, (history.timestamps || []).length, (history.bytes || []).length, (history.durations || []).length);
-      for (let index = 0; index < count; index++) {
-        const duration = history.durations[index];
-        rows.push(['generation', index, history.timestamps[index], history.bytes[index], duration, duration > 0 ? (history.bytes[index] / (1024 * 1024)) / duration : 0, '', '', '']);
+    function renderScope(j) {
+      const n = j.length;
+      const d = n ? describe(j) : null;
+      $('scope-empty').hidden = n > 0;
+      setText('ro-median', d ? fmtUs(d.median) : '—');
+      setText('ro-p95', d ? fmtUs(d.p95) : '—');
+      setText('ro-min', d ? fmtUs(d.min) : '—');
+      setText('ro-max', d ? fmtUs(d.max) : '—');
+      setText('ro-sd', d ? fmtUs(d.sd) : '—');
+      setText('ro-count', nf(n));
+      if (d && (state.autoscale || !state.scopeScale)) {
+        const pad = Math.max((d.max - d.min) * 0.15, d.max * 0.02, 0.5);
+        state.scopeScale = niceScale(Math.max(0, d.min - pad), d.max + pad);
       }
-      if (data.timeline) {
-        const timeline = data.timeline;
-        const base = timeline.request.start;
-        const total = Math.max((timeline.serialization.start + timeline.serialization.duration) - base, .000001);
-        [['request', timeline.request], ['entropy', timeline.entropy], ['processing', timeline.processing], ['serialization', timeline.serialization]].forEach(([name, stage]) => {
-          rows.push(['pipeline', name, '', '', stage.duration, '', stage.start, stage.start + stage.duration, stage.duration / total * 100]);
-        });
-      }
-      downloadBlob('jitterentropy-analysis.csv', 'text/csv;charset=utf-8', rows.map(row => row.map(csvCell).join(',')).join('\n'));
-    });
-
-    function timelinePngCanvas(data) {
-      const canvas = document.createElement('canvas'); canvas.width = 1400; canvas.height = 440;
-      const ctx = canvas.getContext('2d'); ctx.fillStyle = '#10161c'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#e6ebef'; ctx.font = '600 24px Segoe UI'; ctx.fillText('Jitterentropy timing analysis', 42, 46);
-      const timeline = data.timeline;
-      if (!timeline) { ctx.fillStyle = '#9ba8b5'; ctx.font = '18px Segoe UI'; ctx.fillText('No measured pipeline available.', 42, 90); return canvas; }
-      const base = timeline.request.start, total = Math.max((timeline.serialization.start + timeline.serialization.duration) - base, .000001);
-      const stages = [['Request dispatch', timeline.request, '#52b9d4'], ['Entropy collection', timeline.entropy, '#63ba88'], ['Result processing', timeline.processing, '#d8a85a'], ['Telemetry serialization', timeline.serialization, '#8797a5']];
-      stages.forEach(([name, stage, color], index) => {
-        const y = 95 + index * 72, left = 295 + (stage.start - base) / total * 1040, width = Math.max(4, stage.duration / total * 1040);
-        ctx.fillStyle = '#9ba8b5'; ctx.font = '15px Cascadia Mono'; ctx.fillText(name, 42, y + 21);
-        ctx.fillStyle = '#1d2631'; ctx.fillRect(295, y, 1040, 34);
-        ctx.fillStyle = color; ctx.fillRect(left, y + 8, width, 18);
-        ctx.fillStyle = '#d7e0e5'; ctx.font = '13px Cascadia Mono'; ctx.fillText(`${formatPipelineTime(stage.duration)} · ${(stage.duration / total * 100).toFixed(2)}%`, 295, y + 56);
+      const scale = state.scopeScale || niceScale(0, 1000);
+      drawPlot('cv-scope', {
+        n, scale,
+        yFmt: timeAxis(scale, 1e-6),
+        xFmt: i => i === n - 1 ? 'latest' : `${i - (n - 1)}`,
+        draw: ({ ctx, X, Y, plot }) => {
+          const grad = ctx.createLinearGradient(0, plot.y, 0, plot.y + plot.h);
+          grad.addColorStop(0, 'rgba(34,176,108,.20)');
+          grad.addColorStop(1, 'rgba(34,176,108,0)');
+          tracePath(ctx, j, X, Y);
+          ctx.lineTo(X(n - 1), plot.y + plot.h); ctx.lineTo(X(0), plot.y + plot.h); ctx.closePath();
+          ctx.fillStyle = grad; ctx.fill();
+          ctx.lineJoin = 'round';
+          tracePath(ctx, j, X, Y); ctx.strokeStyle = C.glow; ctx.lineWidth = 5; ctx.stroke();
+          ctx.strokeStyle = C.phosphor; ctx.lineWidth = 1.75; ctx.stroke();
+          if (n > 1) {
+            refLine(ctx, plot, Y(d.median), `median ${fmtUs(d.median)}`, false);
+            refLine(ctx, plot, Y(d.p95), `95th ${fmtUs(d.p95)}`, true);
+          }
+        },
+        focus: i => j[i],
+        tip: i => [i === n - 1 ? 'Latest call' : `${nf(n - 1 - i)} calls before the latest`, fmtUs(j[i])]
       });
-      return canvas;
     }
 
-    document.getElementById('export-png').addEventListener('click', () => {
-      if (!latestTelemetry) return;
-      const source = currentTab === 'timeline' ? timelinePngCanvas(frozenTelemetry || latestTelemetry) : document.getElementById(currentTab === 'oscilloscope' ? 'canvas-oscilloscope' : 'canvas-performance');
-      source.toBlob(blob => { if (blob) downloadBlob(`jitterentropy-${currentTab}.png`, 'image/png', blob); }, 'image/png');
+    function renderStreamChecks(jh) {
+      const el = $('ro-stream');
+      if (!jh || !jh.sampleCount) {
+        setState(el, 'idle'); setText('ro-stream-v', '—'); setText('ro-stream-n', 'Proxy check on timings');
+        return;
+      }
+      const ok = jh.rct.passed && jh.apt.passed;
+      setState(el, ok ? 'pass' : 'warn');
+      setText('ro-stream-v', ok ? 'Pass' : 'Flagged');
+      setText('ro-stream-n', `Longest repeat ${jh.rct.maxRun} of ${jh.rct.cutoff}`);
+      el.title = `SP 800-90B style checks on the timings above, a coarse proxy rather than the library's own tests. Repetition: longest run ${jh.rct.maxRun}, cutoff ${jh.rct.cutoff}. Proportion: ${jh.apt.windowsFailed} of ${plural(jh.apt.windowsTested, 'window')} of ${jh.apt.windowSize} flagged.`;
+    }
+
+    function renderNoise() {
+      const s = state.sample;
+      const cv = $('cv-noise');
+      $('noise-empty').hidden = !!s;
+      cv.style.visibility = s ? 'visible' : 'hidden';
+      if (!s) { setText('noise-caption', ''); return; }
+      const bytes = s.bytes;
+      const bits = state.noiseMode === 'bits';
+      const count = bits ? bytes.length * 8 : bytes.length;
+      const side = Math.max(1, Math.ceil(Math.sqrt(count)));
+      cv.width = side; cv.height = side;
+      const ctx = cv.getContext('2d');
+      const img = ctx.createImageData(side, side);
+      const px = img.data;
+      for (let i = 0; i < side * side; i++) {
+        let c;
+        if (i >= count) c = C.unused;
+        else if (bits) c = (bytes[i >> 3] >> (7 - (i & 7))) & 1 ? C.bitOn : C.bitOff;
+        else {
+          const f = bytes[i] / 255;
+          c = [C.bitOff[0] + (C.byteHi[0] - C.bitOff[0]) * f, C.bitOff[1] + (C.byteHi[1] - C.bitOff[1]) * f, C.bitOff[2] + (C.byteHi[2] - C.bitOff[2]) * f];
+        }
+        px[i * 4] = c[0]; px[i * 4 + 1] = c[1]; px[i * 4 + 2] = c[2]; px[i * 4 + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+      sizeNoise();
+      setText('noise-caption', bits
+        ? `${fmtBytes(bytes.length)} as ${nf(count)} bits, ${side} × ${side}. Stripes, blocks or repeats would mean the output is not random.`
+        : `${nf(count)} bytes, ${side} × ${side}, dark to bright for 0x00 to 0xFF. Even static is what a good source looks like.`);
+    }
+
+    function sizeNoise() {
+      const r = $('noise-wrap').getBoundingClientRect();
+      const size = Math.max(0, Math.floor(Math.min(r.width, r.height)));
+      const cv = $('cv-noise');
+      cv.style.width = cv.style.height = `${size}px`;
+    }
+
+    function sampleTests(s) {
+      const e = s && s.stats;
+      if (!e) return [];
+      const n = e.byteCount;
+      const r = e.serialCorrelation;
+      return [
+        { name: 'Byte distribution', ref: 'Chi-square, 255 df', p: e.chiSquare.pValue,
+          value: `χ² ${nf(e.chiSquare.statistic, 1)}` },
+        { name: 'Bit balance', ref: 'SP 800-22 monobit', p: e.monobit.pValue,
+          value: `${nf(e.monobit.ones / (e.monobit.bitTotal || 1) * 100, 2)}% ones` },
+        { name: 'Runs of equal bits', ref: 'SP 800-22 runs', p: e.runs.applicable ? e.runs.pValue : null,
+          value: e.runs.applicable ? plural(e.runs.observedRuns, 'run') : 'Not applicable, bits too unbalanced' },
+        /* Under independence, r is roughly normal with variance 1/n. */
+        { name: 'Byte-to-byte correlation', ref: 'Lag-1 coefficient', p: n > 1 ? erfc(Math.abs(r) * Math.sqrt(n) / Math.SQRT2) : null,
+          value: `r = ${r.toFixed(4)}` }
+      ];
+    }
+
+    function computeVerdict() {
+      const hf = state.libStatus && state.libStatus.healthFailure;
+      const names = kind => HEALTH_TESTS.filter(([k]) => hf && hf[k] && hf[k][kind]).map(([, n]) => n.toLowerCase());
+      const perm = names('permanent'), inter = names('intermittent');
+      const s = state.sample;
+      const tests = sampleTests(s);
+      if (perm.length) return { st: 'fail', word: 'Health failure', reason: `The library reports a permanent ${perm.join(' and ')} failure. Do not use output from this collector; apply settings to start a new one.`, tests };
+      if (state.lastFailure && state.lastFailure.action === 'generate') return { st: 'fail', word: 'Generate failed', reason: `${resultText(state.lastFailure.status)}. Try again; if it repeats, check the collector settings.`, tests };
+      if (!s) return { st: 'idle', word: 'No sample yet', reason: 'Generate a sample to test it. The library’s own health tests are shown on the left.', tests };
+      const flagged = tests.filter(x => x.p != null && x.p < 0.01);
+      const small = s.bytes.length < 1024 ? ' Samples under 1 KiB make these tests weak.' : '';
+      if (inter.length) return { st: 'warn', word: 'Investigate', reason: `The library saw an intermittent ${inter.join(' and ')} failure and recovered. Watch whether it repeats.${small}`, tests };
+      if (flagged.length) return { st: 'warn', word: 'Investigate', reason: `${flagged.map(x => x.name.toLowerCase()).join(' and ')} fell below p = 0.01. About one random sample in a hundred does that per test, so generate again before drawing conclusions.`.replace(/^./, c => c.toUpperCase()), tests };
+      return { st: 'pass', word: 'No anomalies found', reason: `All ${tests.filter(x => x.p != null).length} tests pass on the last ${fmtBytes(s.bytes.length)} sample and the library reports no health-test failures.${small}`, tests };
+    }
+
+    function renderVerdict() {
+      const v = computeVerdict();
+      const el = $('verdict');
+      setState(el, v.st);
+      el.querySelector('.verdict-head use').setAttribute('href', `#i-${ICON_FOR[v.st]}`);
+      setText('verdict-word', v.word);
+      setText('verdict-reason', v.reason);
+
+      const sess = (state.t && state.t.session) || {};
+      const e = state.sample && state.sample.stats;
+      const has = sess.byteCount > 0;
+      setText('fig-shannon', has ? sess.shannonBitsPerByte.toFixed(4) : '—');
+      setText('fig-shannon-note', e ? `Session total. Last sample ${e.shannonBitsPerByte.toFixed(4)}` : 'Session total');
+      setText('fig-min', has ? sess.minEntropyBitsPerByte.toFixed(3) : '—');
+      setText('fig-min-note', e ? `Session total. Last sample ${e.minEntropyBitsPerByte.toFixed(3)}` : 'Worst-case guessability');
+      setText('fig-bytes', fmtBytes(sess.byteCount || 0));
+      setText('fig-bytes-note', state.sample ? `This session. Last sample ${fmtBytes(state.sample.bytes.length)}` : 'This session');
+
+      const box = $('tests');
+      box.replaceChildren();
+      const rows = v.tests.length ? v.tests : [
+        { name: 'Byte distribution', ref: 'Chi-square, 255 df', p: null },
+        { name: 'Bit balance', ref: 'SP 800-22 monobit', p: null },
+        { name: 'Runs of equal bits', ref: 'SP 800-22 runs', p: null },
+        { name: 'Byte-to-byte correlation', ref: 'Lag-1 coefficient', p: null }
+      ];
+      for (const t of rows) {
+        const st = t.p == null ? 'na' : t.p < 0.01 ? 'warn' : 'pass';
+        const name = document.createElement('div');
+        name.className = 'test-name'; name.setAttribute('role', 'rowheader');
+        name.innerHTML = '<b></b><small></small>';
+        name.firstChild.textContent = t.name;
+        name.lastChild.textContent = t.value || t.ref;
+        name.title = t.ref;
+        const ruler = document.createElement('div');
+        ruler.className = 'ruler'; ruler.dataset.state = st; ruler.setAttribute('role', 'cell');
+        ruler.setAttribute('aria-label', t.p == null ? 'No result' : `p ${fmtP(t.p)}`);
+        if (t.p == null) ruler.dataset.empty = '';
+        ruler.style.setProperty('--pos', t.p == null ? 0 : clamp((Math.log10(Math.max(t.p, 1e-4)) + 4) / 4, 0, 1));
+        ruler.innerHTML = '<i></i>';
+        const p = document.createElement('div');
+        p.className = 'test-p'; p.dataset.state = st; p.setAttribute('role', 'cell');
+        p.innerHTML = iconUse(ICON_FOR[st]);
+        p.append(t.p == null ? '—' : `p ${fmtP(t.p)}`);
+        box.append(name, ruler, p);
+      }
+      const scale = document.createElement('div');
+      scale.className = 'ruler-scale'; scale.setAttribute('aria-hidden', 'true');
+      scale.innerHTML = '<span>0.0001</span><span>0.01, flagged below</span><span>1</span>';
+      box.append(scale);
+    }
+
+    /* ---------------- Sample analysis ---------------- */
+    function buildHeatmap() {
+      const grid = $('heatmap');
+      const hex = '0123456789ABCDEF';
+      const parts = ['<span></span>'];
+      for (let c = 0; c < 16; c++) parts.push(`<span class="lbl">_${hex[c]}</span>`);
+      for (let r = 0; r < 16; r++) {
+        parts.push(`<span class="lbl">${hex[r]}_</span>`);
+        for (let c = 0; c < 16; c++) parts.push(`<span class="cell" data-b="${r * 16 + c}"></span>`);
+      }
+      grid.innerHTML = parts.join('');
+      grid.addEventListener('pointermove', e => {
+        const b = e.target.dataset && e.target.dataset.b;
+        if (b == null || !state.heat) return hideTip();
+        const i = +b, { counts, total } = state.heat;
+        const exp = total / 256, z = exp ? (counts[i] - exp) / Math.sqrt(exp) : 0;
+        showTip([`0x${i.toString(16).toUpperCase().padStart(2, '0')}`, `Seen ${plural(counts[i], 'time')}`, `Expected ${nf(exp, 1)}, ${z >= 0 ? '+' : '−'}${nf(Math.abs(z), 2)} σ`], e.clientX, e.clientY);
+      });
+      grid.addEventListener('pointerleave', hideTip);
+    }
+
+    function sampleHistogram() {
+      const s = state.sample;
+      if (!s) return null;
+      if (!s.hist) {
+        s.hist = new Array(256).fill(0);
+        for (const b of s.bytes) s.hist[b]++;
+      }
+      return s.hist;
+    }
+
+    function renderSample(force) {
+      const t = state.t || {};
+      const sess = t.session || {};
+      if (changed('heat', `${state.sampleVersion}|${sess.byteCount}|${state.heatSource}`, force)) {
+        renderHeatmap(sess);
+        renderDetailTable(sess);
+      }
+      if (changed('walk', `${state.sampleVersion}|${state.hover['cv-walk']}`, force)) renderWalk();
+      if (changed('hex', `${state.sampleVersion}`, force)) renderHex();
+    }
+
+    function renderHeatmap(sess) {
+      const fromSession = state.heatSource === 'session';
+      const counts = fromSession ? sess.histogram : sampleHistogram();
+      const total = fromSession ? sess.byteCount : (state.sample ? state.sample.bytes.length : 0);
+      $('heat-empty').hidden = total > 0;
+      state.heat = total ? { counts, total } : null;
+      const cells = $('heatmap').querySelectorAll('.cell');
+      if (!total) { cells.forEach(c => { c.style.background = ''; }); setText('heat-caption', ''); return; }
+      const exp = total / 256;
+      let worst = 0, worstZ = 0;
+      cells.forEach((cell, i) => {
+        const z = (counts[i] - exp) / Math.sqrt(exp);
+        if (Math.abs(z) > Math.abs(worstZ)) { worstZ = z; worst = i; }
+        cell.style.background = mix(C.neutral, z < 0 ? C.cool : C.warm, Math.min(1, Math.abs(z) / 3));
+      });
+      const name = `0x${worst.toString(16).toUpperCase().padStart(2, '0')}`;
+      setText('heat-caption', `${fmtBytes(total)} ${fromSession ? 'this session' : 'in the last sample'}, ${nf(exp, 1)} expected per value. Largest deviation ${name}, ${worstZ >= 0 ? '+' : '−'}${nf(Math.abs(worstZ), 1)} σ; a few cells past ±2.5 σ are normal across 256 values.`);
+      $('heatmap').setAttribute('aria-label', `Frequency of each byte value over ${fmtBytes(total)}. Largest deviation ${name} at ${nf(worstZ, 1)} sigma.`);
+    }
+
+    function renderDetailTable(sess) {
+      const e = state.sample && state.sample.stats;
+      const tests = sampleTests(state.sample);
+      const has = sess.byteCount > 0;
+      const rows = [
+        ['Shannon entropy', 'bits per byte, 8 is ideal', e ? e.shannonBitsPerByte.toFixed(4) : '—', has ? sess.shannonBitsPerByte.toFixed(4) : '—'],
+        ['Min-entropy', 'bits per byte, bounds the best guess', e ? e.minEntropyBitsPerByte.toFixed(3) : '—', has ? sess.minEntropyBitsPerByte.toFixed(3) : '—'],
+        ['Byte distribution', 'chi-square statistic and p', e ? `${nf(e.chiSquare.statistic, 1)}, p ${fmtP(e.chiSquare.pValue)}` : '—',
+          has ? `${nf(sess.chiSquare.statistic, 1)}, p ${fmtP(sess.chiSquare.pValue)}` : '—', e && e.chiSquare.pValue, has && sess.chiSquare.pValue],
+        ...tests.slice(1).map(x => [x.name, x.ref, `${x.value}${x.p != null ? `, p ${fmtP(x.p)}` : ''}`, '—', x.p]),
+        ['Bytes', 'analysed', e ? nf(e.byteCount) : '—', has ? nf(sess.byteCount) : '—']
+      ];
+      const body = $('detail-table').tBodies[0];
+      body.replaceChildren(...rows.map(([name, sub, last, session, pLast, pSess]) => {
+        const tr = document.createElement('tr');
+        const td0 = document.createElement('td');
+        td0.textContent = name;
+        const small = document.createElement('small'); small.textContent = sub; td0.append(small);
+        tr.append(td0, valueCell(last, pLast), valueCell(session, pSess));
+        return tr;
+      }));
+    }
+    function valueCell(text, p) {
+      const td = document.createElement('td');
+      td.className = 'r';
+      if (p == null || p === false) { td.textContent = text; return td; }
+      const st = p < 0.01 ? 'warn' : 'pass';
+      const span = document.createElement('span');
+      span.className = 'state'; span.dataset.state = st;
+      span.innerHTML = iconUse(ICON_FOR[st]);
+      span.append(text);
+      td.append(span);
+      return td;
+    }
+
+    function renderWalk() {
+      const s = state.sample;
+      $('walk-empty').hidden = !!s;
+      if (!s) { drawPlot('cv-walk', { n: 0, scale: niceScale(-10, 10), yFmt: v => nf(v) }); return; }
+      if (!s.walk) {
+        const n = s.bytes.length * 8;
+        const w = new Int32Array(n + 1);
+        let sum = 0;
+        for (let i = 0; i < n; i++) { sum += (s.bytes[i >> 3] >> (7 - (i & 7))) & 1 ? 1 : -1; w[i + 1] = sum; }
+        s.walk = w;
+      }
+      const w = s.walk, n = w.length;
+      let peak = 0;
+      for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(w[i]));
+      const Z = 2.576;
+      const m = Math.max(peak, Z * Math.sqrt(n - 1)) * 1.08;
+      const scale = niceScale(-m, m);
+      drawPlot('cv-walk', {
+        n, scale,
+        yFmt: v => (v > 0 ? '+' : v < 0 ? '−' : '') + nf(Math.abs(v)),
+        xFmt: i => i === 0 ? 'bit 0' : nf(i),
+        padRight: 18,
+        draw: ({ ctx, X, Y, plot }) => {
+          /* 99% envelope for a fair coin: ±2.576·√k after k bits. */
+          const cols = Math.max(2, Math.floor(plot.w));
+          ctx.beginPath();
+          for (let c = 0; c <= cols; c++) { const k = (n - 1) * c / cols; ctx.lineTo(plot.x + plot.w * c / cols, Y(Z * Math.sqrt(k))); }
+          for (let c = cols; c >= 0; c--) { const k = (n - 1) * c / cols; ctx.lineTo(plot.x + plot.w * c / cols, Y(-Z * Math.sqrt(k))); }
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(217,229,226,.07)'; ctx.fill();
+          ctx.strokeStyle = 'rgba(217,229,226,.3)'; ctx.lineWidth = 1; ctx.stroke();
+          ctx.strokeStyle = 'rgba(217,229,226,.25)';
+          ctx.beginPath(); ctx.moveTo(plot.x, Y(0)); ctx.lineTo(plot.x + plot.w, Y(0)); ctx.stroke();
+
+          ctx.strokeStyle = C.phosphor; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+          if (n <= plot.w * 2) {
+            tracePath(ctx, w, X, Y); ctx.stroke();
+          } else {
+            /* Far more bits than pixels: draw each column's min..max. */
+            ctx.beginPath();
+            for (let c = 0; c < cols; c++) {
+              const a = Math.floor((n - 1) * c / cols), b = Math.max(a + 1, Math.floor((n - 1) * (c + 1) / cols));
+              let lo = w[a], hi = w[a];
+              for (let i = a; i <= b && i < n; i++) { if (w[i] < lo) lo = w[i]; if (w[i] > hi) hi = w[i]; }
+              const x = plot.x + plot.w * c / cols + .5;
+              ctx.moveTo(x, Y(hi) - .5); ctx.lineTo(x, Y(lo) + .5);
+            }
+            ctx.stroke();
+          }
+          const end = w[n - 1];
+          ctx.font = FONT; ctx.fillStyle = C.ink; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+          ctx.fillText(`ends at ${end > 0 ? '+' : end < 0 ? '−' : ''}${nf(Math.abs(end))}`, plot.x + plot.w - 4, Y(end) - 6);
+        },
+        focus: i => w[i],
+        tip: i => [`After ${plural(i, 'bit')}`, `Walk ${w[i] > 0 ? '+' : w[i] < 0 ? '−' : ''}${nf(Math.abs(w[i]))}`, `99% band ±${nf(Z * Math.sqrt(i), 0)}`]
+      });
+    }
+
+    function renderHex() {
+      const s = state.sample;
+      $('hex-empty').hidden = !!s;
+      if (!s) { $('hexdump').textContent = ''; setText('hex-sub', 'Last sample'); return; }
+      const b = s.bytes, lines = [];
+      for (let off = 0; off < b.length; off += 16) {
+        let hex = '', ascii = '';
+        for (let i = 0; i < 16; i++) {
+          if (off + i < b.length) {
+            const v = b[off + i];
+            hex += v.toString(16).padStart(2, '0') + (i === 7 ? '  ' : ' ');
+            ascii += v >= 32 && v < 127 ? String.fromCharCode(v) : '·';
+          } else hex += i === 7 ? '    ' : '   ';
+        }
+        lines.push(`${off.toString(16).padStart(5, '0')}   ${hex}  ${ascii}`);
+      }
+      $('hexdump').textContent = lines.join('\n');
+      setText('hex-sub', `${fmtBytes(b.length)}, generated ${s.at.toLocaleTimeString('en-GB')}`);
+    }
+
+    /* ---------------- Performance ---------------- */
+    function renderPerformance(force) {
+      const t = state.t || {};
+      const h = t.health || {};
+      setText('pf-thr', h.throughput_bytes_per_second ? fmtRate(h.throughput_bytes_per_second) : '—');
+      setText('pf-lat', h.average_latency_seconds ? fmtTime(h.average_latency_seconds) : '—');
+      setText('pf-calls', nf(h.generation_call_count || 0));
+      setText('pf-fail', h.failure_count ? `${plural(h.failure_count, 'failure')}, last: ${resultText(h.last_error_code)}` : 'No failures');
+      setState($('pf-fail'), h.failure_count ? 'fail' : 'idle');
+      $('pf-fail').style.color = h.failure_count ? 'var(--fail)' : '';
+      setText('pf-bytes', fmtBytes(h.total_bytes_generated || 0));
+      const b = state.lastBench;
+      setText('pf-bench', b && b.duration > 0 ? fmtRate(b.bytes * b.iterations / b.duration) : '—');
+      setText('pf-bench-n', b ? `${plural(b.iterations, 'call')} of ${fmtBytes(b.bytes)} in ${fmtTime(b.duration)}` : 'None run yet');
+
+      const hist = t.history || {};
+      const hs = `${hist.count}|${hist.timestamps && hist.timestamps[hist.timestamps.length - 1]}`;
+      if (changed('lat', `${hs}|${state.hover['cv-lat']}`, force)) renderLatency(hist);
+      if (changed('thr', `${hs}|${state.hover['cv-thr']}`, force)) renderThroughput(hist);
+      if (changed('pipe', JSON.stringify(t.timeline || null), force)) renderPipeline(t.timeline);
+      if (changed('log', String(state.logVersion), force)) renderLog();
+    }
+
+    function historyCount(hist) {
+      return Math.min(hist.count || 0, (hist.durations || []).length, (hist.bytes || []).length);
+    }
+
+    function renderLatency(hist) {
+      const n = historyCount(hist);
+      $('lat-empty').hidden = n > 0;
+      if (!n) { setText('pf-trend', 'No calls yet'); drawPlot('cv-lat', { n: 0, scale: niceScale(0, 1), yFmt: () => '' }); return; }
+      const lat = hist.durations.slice(0, n);
+      const W = Math.min(12, Math.max(3, Math.floor(n / 8)));
+      const roll = lat.map((_, i) => { const a = Math.max(0, i - W + 1); let s = 0; for (let k = a; k <= i; k++) s += lat[k]; return s / (i - a + 1); });
+      const slow = lat.map((v, i) => i >= W && v > roll[i] * 1.25);
+      setText('lat-roll-label', `Mean of ${W}`);
+      const last = roll[n - 1], base = roll[Math.max(0, n - 9)];
+      setText('pf-trend', n < 10 ? `${plural(n, 'call')} recorded` : Math.abs(last - base) <= base * 0.03 ? 'Steady over recent calls' : last > base ? 'Rising over recent calls' : 'Falling over recent calls');
+      let lo = Infinity, hi = 0;
+      for (const v of lat) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+      const pad = Math.max((hi - lo) * 0.15, hi * 0.05, 1e-7);
+      const scale = niceScale(Math.max(0, lo - pad), hi + pad);
+      const ts = hist.timestamps || [];
+      drawPlot('cv-lat', {
+        n, scale,
+        yFmt: timeAxis(scale, 1),
+        xFmt: i => i === n - 1 ? 'latest' : `${i - (n - 1)}`,
+        draw: ({ ctx, X, Y }) => {
+          ctx.lineJoin = 'round';
+          tracePath(ctx, lat, X, Y); ctx.strokeStyle = C.phosphor; ctx.lineWidth = 1.25; ctx.stroke();
+          tracePath(ctx, roll, X, Y); ctx.strokeStyle = C.violet; ctx.lineWidth = 2; ctx.stroke();
+          ctx.lineWidth = 2;
+          lat.forEach((v, i) => {
+            if (!slow[i]) return;
+            ctx.beginPath(); ctx.arc(X(i), Y(v), 4.5, 0, Math.PI * 2);
+            ctx.strokeStyle = C.glass; ctx.lineWidth = 4; ctx.stroke();
+            ctx.strokeStyle = C.amber; ctx.lineWidth = 2; ctx.stroke();
+          });
+        },
+        focus: i => lat[i],
+        tip: i => [i === n - 1 ? 'Latest call' : `${nf(n - 1 - i)} calls before the latest`, `Latency ${fmtTime(lat[i])}`, `Mean of ${W}: ${fmtTime(roll[i])}`,
+          ...(slow[i] ? ['Slow: over 125% of the rolling mean'] : []), ...(ts[i] != null ? [`At ${fmtClock(ts[i])} into the session`] : [])]
+      });
+    }
+
+    function renderThroughput(hist) {
+      const n = historyCount(hist);
+      $('thr-empty').hidden = n > 0;
+      if (!n) { drawPlot('cv-thr', { n: 0, scale: niceScale(0, 1), yFmt: () => '' }); return; }
+      const raw = Array.from({ length: n }, (_, i) => hist.durations[i] > 0 ? hist.bytes[i] / hist.durations[i] : 0);
+      /* Scale in one binary unit so ticks land on round KiB/s or MiB/s values. */
+      const peak = Math.max(...raw, 1);
+      const [unit, k] = peak >= 1048576 ? ['MiB/s', 1048576] : peak >= 1024 ? ['KiB/s', 1024] : ['B/s', 1];
+      const thr = raw.map(v => v / k);
+      const scale = niceScale(0, peak / k * 1.12);
+      const dec = clamp(-Math.floor(Math.log10(scale.step) + 1e-9), 0, 2);
+      drawPlot('cv-thr', {
+        n, scale,
+        yFmt: v => `${nf(v, dec)} ${unit}`,
+        xFmt: i => i === n - 1 ? 'latest' : `${i - (n - 1)}`,
+        padRight: 14,
+        draw: ({ ctx, X, Y, plot }) => {
+          tracePath(ctx, thr, X, Y);
+          ctx.lineTo(X(n - 1), plot.y + plot.h); ctx.lineTo(X(0), plot.y + plot.h); ctx.closePath();
+          ctx.fillStyle = 'rgba(34,176,108,.16)'; ctx.fill();
+          tracePath(ctx, thr, X, Y); ctx.strokeStyle = C.phosphor; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke();
+        },
+        focus: i => thr[i],
+        tip: i => [i === n - 1 ? 'Latest call' : `${nf(n - 1 - i)} calls before the latest`, fmtRate(raw[i]), `${fmtBytes(hist.bytes[i])} in ${fmtTime(hist.durations[i])}`]
+      });
+    }
+
+    const STAGES = [
+      ['request', 'Dispatch', 'Worker start, lock and collector setup'],
+      ['entropy', 'Entropy collection', 'The collector producing bytes'],
+      ['processing', 'Processing', 'Hex encoding, statistics and wiping'],
+      ['serialization', 'Telemetry frame', 'The frame that delivered the result']
+    ];
+
+    function renderPipeline(tl) {
+      const svg = $('pipe-svg');
+      $('pipe-empty').hidden = !!tl;
+      if (!tl) { svg.innerHTML = ''; $('stage-table').innerHTML = ''; return; }
+      const t0 = tl.request.start;
+      const pending = tl.serializationPending;
+      const end = pending ? tl.processing.start + tl.processing.duration : tl.serialization.start + tl.serialization.duration;
+      const total = Math.max(end - t0, 1e-9);
+      const W = Math.max(320, Math.floor(svg.getBoundingClientRect().width || 600));
+      const LX = 132, PW = W - LX - 8, LH = 38, H = STAGES.length * LH + 26;
+      const xOf = s => LX + clamp((s - t0) / total, 0, 1) * PW;
+      const longest = STAGES.reduce((a, s) => (tl[s[0]].duration > tl[a[0]].duration ? s : a), STAGES[0])[0];
+      let out = '';
+      STAGES.forEach(([key, name], i) => {
+        const st = tl[key];
+        const y = i * LH, low = y + 28, high = y + 10;
+        const skip = key === 'serialization' && pending;
+        const x0 = xOf(st.start), x1 = Math.max(x0 + 1.5, xOf(st.start + st.duration));
+        out += `<text x="0" y="${y + 18}" fill="${C.ink}" font-size="13" font-family="Bahnschrift, Segoe UI">${name}</text>`;
+        out += `<text x="0" y="${y + 33}" fill="${C.ink2}" font-size="12" font-family="Bahnschrift, Segoe UI">${skip ? 'waiting' : fmtTime(st.duration)}</text>`;
+        out += `<line x1="${LX}" x2="${LX + PW}" y1="${y + LH - 2}" y2="${y + LH - 2}" stroke="rgba(217,229,226,.08)"/>`;
+        const color = key === longest ? C.phosphor : '#5FA9C4';
+        out += skip
+          ? `<path d="M${LX} ${low}H${LX + PW}" stroke="${C.ink2}" stroke-width="1.5" fill="none"/>`
+          : `<path d="M${LX} ${low}H${x0.toFixed(1)}V${high}H${x1.toFixed(1)}V${low}H${LX + PW}" stroke="${color}" stroke-width="1.75" fill="none" stroke-linejoin="round"/>`
+            + `<rect x="${x0.toFixed(1)}" y="${high}" width="${(x1 - x0).toFixed(1)}" height="${low - high}" fill="${color}" opacity=".14"/>`;
+      });
+      const ticks = PW < 460 ? 2 : 4, ty = STAGES.length * LH + 18;
+      for (let k = 0; k <= ticks; k++) {
+        const x = LX + PW * k / ticks;
+        out += `<text x="${x}" y="${ty}" fill="${C.ink2}" font-size="12" font-family="Bahnschrift, Segoe UI" text-anchor="${k === 0 ? 'start' : k === ticks ? 'end' : 'middle'}">${k === 0 ? '0' : fmtTime(total * k / ticks)}</text>`;
+      }
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.setAttribute('height', H);
+      svg.innerHTML = out;
+
+      const rows = STAGES.map(([key, name, desc]) => {
+        const st = tl[key];
+        const skip = key === 'serialization' && pending;
+        return `<tr class="${key === longest ? 'longest' : ''}" title="${desc}"><td>${name}${key === longest ? ', longest' : ''}</td><td>${skip ? '—' : '+' + fmtTime(st.start - t0)}</td><td>${skip ? '—' : fmtTime(st.duration)}</td><td>${skip ? '—' : nf(st.duration / total * 100, 1) + '%'}</td></tr>`;
+      }).join('');
+      $('stage-table').innerHTML = `<thead><tr><th>Stage</th><th>Starts at</th><th>Duration</th><th>Share</th></tr></thead><tbody>${rows}</tbody>`;
+    }
+
+    function renderLog() {
+      const body = $('log-body');
+      $('log-empty').hidden = state.log.length > 0;
+      body.replaceChildren(...state.log.map(e => {
+        const tr = document.createElement('tr');
+        const cells = [e.time.toLocaleTimeString('en-GB'), e.action.charAt(0).toUpperCase() + e.action.slice(1), null, e.detail];
+        cells.forEach((c, i) => {
+          const td = document.createElement('td');
+          if (i === 2) {
+            const span = document.createElement('span');
+            span.className = 'state'; span.dataset.state = e.st;
+            span.innerHTML = iconUse(ICON_FOR[e.st]);
+            span.append(e.result);
+            td.append(span);
+          } else td.textContent = c;
+          tr.append(td);
+        });
+        return tr;
+      }));
+    }
+
+    /* ---------------- Collector ---------------- */
+    function fillConfigForm(s) {
+      $('cfg-osr').value = s.osr;
+      $('cfg-fips').checked = !!s.forceFips;
+      $('cfg-ntg1').checked = !!s.ntg1;
+      $('cfg-mem').checked = !s.disableMemoryAccess;
+    }
+
+    function renderCollector(force) {
+      const st = state.libStatus;
+      if (!changed('collector', st ? JSON.stringify(st) + state.libStatusLive : '', force)) return;
+      $('raw-empty').hidden = !!st;
+      $('raw-status').textContent = st ? JSON.stringify(st, null, 2) : '';
+      const list = $('env-list');
+      if (!st) { list.replaceChildren(); setText('env-note', 'Reported by the library once a collector exists. Generate a sample to start one.'); return; }
+      const env = st.runtimeEnvironment || {}, cfg = st.configuration || {}, out = st.output || {};
+      const yes = v => (v ? 'Yes' : 'No');
+      const items = [
+        ['CPU cores', nf(env.cpuCores)],
+        ['L1 data cache', env.cpuCache ? fmtBytes(env.cpuCache.l1Bytes) : '—'],
+        ['All caches', env.cpuCache ? fmtBytes(env.cpuCache.allBytes) : '—'],
+        ['Memory block', fmtBytes(cfg.memoryBlockSizeBytes)],
+        ['Oversampling in use', nf(cfg.osr)],
+        ['Hash loops', cfg.hashLoopCount ? `${nf(cfg.hashLoopCount.runtime)}, ${nf(cfg.hashLoopCount.initialization)} at start` : '—'],
+        ['Memory loops', cfg.memoryLoopCount ? `${nf(cfg.memoryLoopCount.runtime)}, ${nf(cfg.memoryLoopCount.initialization)} at start` : '—'],
+        ['Timer', cfg.internalTimer ? 'Internal software timer' : 'Hardware time stamp'],
+        ['Secure memory', yes(cfg.secureMemory)],
+        ['FIPS mode active', yes(cfg.fipsMode)],
+        ['NTG.1 mode active', yes(cfg.ntg1Mode)],
+        ['Reads served', nf(out.invocations)],
+        ['Bytes served', fmtBytes(out.bytes)],
+        ['Restarts after failures', nf(st.reinitializations)],
+        ['Collector ID', st.uuid || '—']
+      ];
+      list.replaceChildren(...items.map(([k, v]) => {
+        const div = document.createElement('div');
+        const dt = document.createElement('dt'); dt.textContent = k;
+        const dd = document.createElement('dd'); dd.textContent = v; dd.title = v;
+        div.append(dt, dd);
+        return div;
+      }));
+      setText('env-note', state.libStatusLive ? 'Live report from the current collector.' : 'Last report. No collector is allocated right now, or it is busy.');
+    }
+
+    /* ---------------- actions ---------------- */
+    function readInt(id, lo, hi, hintId, hintOk, label) {
+      const el = $(id);
+      const v = Number(el.value);
+      const ok = el.value.trim() !== '' && Number.isInteger(v) && v >= lo && v <= hi;
+      el.setAttribute('aria-invalid', String(!ok));
+      const hint = $(hintId);
+      hint.classList.toggle('error', !ok);
+      hint.textContent = ok ? hintOk : `${label} must be a whole number from ${nf(lo)} to ${nf(hi)}.`;
+      return ok ? v : null;
+    }
+
+    function generate() {
+      if (!state.t || state.t.busy) return;
+      const bytes = readInt('gen-bytes', 1, 65536, 'gen-hint', 'Up to 64 KiB. Bigger samples give steadier test results.', 'Bytes');
+      if (bytes == null) return;
+      state.job = { action: 'generate', target: bytes, base: (state.t.health || {}).total_bytes_generated || 0 };
+      send({ action: 'generate', bytes });
+    }
+
+    function benchmark() {
+      if (!state.t || state.t.busy) return;
+      const okHint = 'Measures latency and throughput on a fresh collector.';
+      const bytes = readInt('bench-bytes', 1, 65536, 'bench-hint', okHint, 'Bytes per call');
+      if (bytes == null) return;
+      const iterations = readInt('bench-iter', 1, 100000, 'bench-hint', okHint, 'Calls');
+      if (iterations == null) return;
+      state.job = { action: 'benchmark', target: iterations, base: (state.t.health || {}).generation_call_count || 0 };
+      send({ action: 'benchmark', bytesPerCall: bytes, iterations });
+    }
+
+    function stop() { if (state.t && state.t.busy) send({ action: 'cancelBenchmark' }); }
+
+    function setView(view, focusTab) {
+      state.view = view;
+      document.querySelectorAll('[role="tab"]').forEach(tab => {
+        const on = tab.dataset.view === view;
+        tab.setAttribute('aria-selected', String(on));
+        tab.tabIndex = on ? 0 : -1;
+        if (on && focusTab) tab.focus();
+      });
+      document.querySelectorAll('.view').forEach(v => { v.hidden = v.id !== `view-${view}`; });
+      hideTip();
+      requestRender(true);
+    }
+
+    $('btn-generate').addEventListener('click', generate);
+    $('btn-benchmark').addEventListener('click', benchmark);
+    $('btn-stop').addEventListener('click', stop);
+    document.querySelectorAll('[data-action="generate"]').forEach(b => b.addEventListener('click', generate));
+    document.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => setView(b.dataset.goto)));
+
+    const presets = document.querySelectorAll('[data-bytes]');
+    const syncPresets = () => presets.forEach(p => p.setAttribute('aria-pressed', String(p.dataset.bytes === $('gen-bytes').value)));
+    presets.forEach(p => p.addEventListener('click', () => { $('gen-bytes').value = p.dataset.bytes; syncPresets(); }));
+    $('gen-bytes').addEventListener('input', syncPresets);
+
+    const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => setView(tab.dataset.view));
+      tab.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        e.preventDefault();
+        const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+        setView(next.dataset.view, true);
+      });
     });
 
-    document.getElementById('copy-metrics').addEventListener('click', async () => {
-      const text = [
-        `RNG state: ${document.getElementById('ft-init').textContent}`,
-        `Worker state: ${document.getElementById('ft-busy').textContent}`,
-        `Throughput: ${document.getElementById('ft-throughput').textContent}`,
-        `Jitter diagnostics: ${document.getElementById('ft-jitter').textContent}`,
-        `Pipeline bottleneck: ${document.getElementById('ft-bottleneck').textContent}`,
-        `Last error: ${document.getElementById('ft-error').textContent}`
-      ].join('\n');
+    function togglePressed(selector, attr, value) {
+      document.querySelectorAll(selector).forEach(b => b.setAttribute('aria-pressed', String(b.dataset[attr] === value)));
+    }
+    document.querySelectorAll('[data-noise]').forEach(b => b.addEventListener('click', () => {
+      state.noiseMode = b.dataset.noise; togglePressed('[data-noise]', 'noise', state.noiseMode); requestRender();
+    }));
+    document.querySelectorAll('[data-heat]').forEach(b => b.addEventListener('click', () => {
+      state.heatSource = b.dataset.heat; togglePressed('[data-heat]', 'heat', state.heatSource); requestRender();
+    }));
+
+    function togglePause() {
+      state.frozen = state.frozen ? null : Array.from((state.t && state.t.jitter) || []);
+      const b = $('btn-pause');
+      b.setAttribute('aria-pressed', String(!!state.frozen));
+      b.innerHTML = state.frozen ? `${iconUse('play')}Resume` : `${iconUse('pause')}Pause`;
+      requestRender(true);
+    }
+    $('btn-pause').addEventListener('click', togglePause);
+    $('btn-autoscale').addEventListener('click', () => {
+      state.autoscale = !state.autoscale;
+      $('btn-autoscale').setAttribute('aria-pressed', String(state.autoscale));
+      requestRender(true);
+    });
+
+    $('btn-clear').addEventListener('click', () => {
+      send({ action: 'clearHistory' });
+      state.sample = null; state.sampleVersion++;
+      state.frozen = null; state.lastFailure = null; state.lastBench = null; state.log = [];
+      $('btn-pause').setAttribute('aria-pressed', 'false');
+      $('btn-pause').innerHTML = `${iconUse('pause')}Pause`;
+      addLog('session', 'idle', 'Cleared', 'Counters, history and session statistics reset');
+      requestRender(true);
+    });
+
+    /* Collector form */
+    const cfgForm = $('cfg-form');
+    cfgForm.addEventListener('input', () => { state.cfgDirty = true; $('cfg-msg').textContent = ''; });
+    $('btn-revert').addEventListener('click', () => {
+      state.cfgDirty = false;
+      if (state.t && state.t.settings) fillConfigForm(state.t.settings);
+      $('cfg-msg').textContent = '';
+    });
+    cfgForm.addEventListener('submit', e => {
+      e.preventDefault();
+      const osr = readInt('cfg-osr', 0, 65535, 'cfg-osr-hint', '0 lets the library choose. Higher values spend more time per output bit for extra margin.', 'Oversampling rate');
+      if (osr == null) return;
+      send({ action: 'configure', osr, forceFips: $('cfg-fips').checked, ntg1: $('cfg-ntg1').checked, disableMemoryAccess: !$('cfg-mem').checked });
+      const msg = $('cfg-msg');
+      msg.textContent = 'Applying';
+      delete msg.dataset.state;
+    });
+
+    /* Theme */
+    function applyTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      const night = theme === 'night';
+      const b = $('btn-theme');
+      b.setAttribute('aria-pressed', String(night));
+      b.querySelector('use').setAttribute('href', night ? '#i-sun' : '#i-moon');
+      try { localStorage.setItem('jent.theme', theme); } catch (_) { /* storage may be unavailable */ }
+      requestRender(true);
+    }
+    $('btn-theme').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'night' ? 'bench' : 'night'));
+    let savedTheme = null;
+    try { savedTheme = localStorage.getItem('jent.theme'); } catch (_) { /* ignore */ }
+    if (savedTheme === 'night') applyTheme('night');
+
+    /* ---------------- export & clipboard ---------------- */
+    async function copyText(text) {
       try { await navigator.clipboard.writeText(text); }
-      catch { const area = document.createElement('textarea'); area.value = text; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
+      catch (_) {
+        const area = document.createElement('textarea');
+        area.value = text; document.body.append(area); area.select(); document.execCommand('copy'); area.remove();
+      }
+    }
+    function flash(text) {
+      $('announcer').textContent = text;
+      const el = $('job-text'), prev = el.textContent;
+      el.textContent = text;
+      setTimeout(() => { if (el.textContent === text) el.textContent = prev; }, 1600);
+    }
+    function download(name, type, content) {
+      const url = URL.createObjectURL(content instanceof Blob ? content : new Blob([content], { type }));
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    const csvCell = v => `"${String(v ?? '').replaceAll('"', '""')}"`;
+
+    function summaryText() {
+      const t = state.t || {}, h = t.health || {}, sess = t.session || {};
+      const v = computeVerdict();
+      const lines = [
+        `Jitterentropy ${t.library ? t.library.version : ''}`.trim(),
+        `Verdict: ${v.word}. ${v.reason}`,
+        `Session: ${fmtBytes(sess.byteCount || 0)} analysed, Shannon ${sess.byteCount ? sess.shannonBitsPerByte.toFixed(4) : '—'}, min-entropy ${sess.byteCount ? sess.minEntropyBitsPerByte.toFixed(3) : '—'} bits per byte`,
+        `Calls: ${nf(h.generation_call_count)}, failures ${nf(h.failure_count)}, throughput ${fmtRate(h.throughput_bytes_per_second || 0)}`
+      ];
+      const hf = state.libStatus && state.libStatus.healthFailure;
+      if (hf) lines.push(`Library health: ${HEALTH_TESTS.filter(([k]) => hf[k]).map(([k, n]) => `${n} ${hf[k].permanent ? 'permanent failure' : hf[k].intermittent ? 'intermittent failure' : 'pass'}`).join(', ')}`);
+      sampleTests(state.sample).forEach(x => lines.push(`${x.name}: ${x.value}${x.p != null ? `, p ${fmtP(x.p)}` : ''}`));
+      return lines.join('\n');
+    }
+
+    function exportCsv() {
+      const t = state.t || {};
+      const rows = [['record', 'key', 'timestamp_s', 'bytes', 'duration_s', 'bytes_per_s', 'start_offset_s', 'share_pct', 'count_session', 'count_last_sample']];
+      const hist = t.history || {};
+      const n = historyCount(hist);
+      for (let i = 0; i < n; i++) {
+        const d = hist.durations[i];
+        rows.push(['call', i, (hist.timestamps || [])[i], hist.bytes[i], d, d > 0 ? hist.bytes[i] / d : 0, '', '', '', '']);
+      }
+      const tl = t.timeline;
+      if (tl && !tl.serializationPending) {
+        const t0 = tl.request.start, end = tl.serialization.start + tl.serialization.duration;
+        STAGES.forEach(([k]) => rows.push(['stage', k, '', '', tl[k].duration, '', tl[k].start - t0, tl[k].duration / (end - t0) * 100, '', '']));
+      }
+      const sh = (t.session || {}).histogram || [], lh = sampleHistogram() || [];
+      for (let b = 0; b < 256; b++) rows.push(['byte_frequency', `0x${b.toString(16).padStart(2, '0')}`, '', '', '', '', '', '', sh[b] ?? '', lh[b] ?? '']);
+      download('jitterentropy-analysis.csv', 'text/csv;charset=utf-8', rows.map(r => r.map(csvCell).join(',')).join('\n'));
+    }
+
+    const menu = $('export-menu'), menuBtn = $('btn-export');
+    function setMenu(open) {
+      menu.hidden = !open;
+      menuBtn.setAttribute('aria-expanded', String(open));
+      if (open) menu.querySelector('button').focus();
+    }
+    menuBtn.addEventListener('click', () => setMenu(menu.hidden));
+    document.addEventListener('click', e => { if (!menu.hidden && !e.target.closest('.menu-wrap')) setMenu(false); });
+    menu.addEventListener('keydown', e => {
+      const items = Array.from(menu.querySelectorAll('button'));
+      const i = items.indexOf(document.activeElement);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+      if (e.key === 'Escape') { setMenu(false); menuBtn.focus(); }
+    });
+    menu.addEventListener('click', async e => {
+      const b = e.target.closest('[data-export]');
+      if (!b) return;
+      setMenu(false);
+      if (b.dataset.export === 'json') {
+        const payload = { exportedAt: new Date().toISOString(), telemetry: state.t, libraryStatus: state.libStatus,
+          lastSample: state.sample ? { hex: state.sample.hex, entropyStats: state.sample.stats } : null, activity: state.log };
+        download('jitterentropy-telemetry.json', 'application/json', JSON.stringify(payload, null, 2));
+      } else if (b.dataset.export === 'csv') exportCsv();
+      else { await copyText(summaryText()); flash('Summary copied'); }
     });
 
-    document.getElementById('clear-history').addEventListener('click', () => {
-      latestFullHex = '';
-      frozenTelemetry = null;
-      if (btnScopeFreeze) {
-        btnScopeFreeze.classList.remove('active');
-        btnScopeFreeze.textContent = 'Freeze';
+    document.querySelectorAll('[data-save]').forEach(b => b.addEventListener('click', () => {
+      const src = $(b.dataset.save);
+      let cv = src;
+      if (src.id === 'cv-noise') {
+        /* The field is drawn one pixel per bit; scale it up crisply. */
+        const k = Math.max(1, Math.ceil(768 / src.width));
+        cv = document.createElement('canvas');
+        cv.width = src.width * k; cv.height = src.height * k;
+        const ctx = cv.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(src, 0, 0, cv.width, cv.height);
       }
-      document.getElementById('ft-hex').textContent = 'No sample generated';
-      document.getElementById('ft-operation').textContent = 'None';
-      document.getElementById('ft-bottleneck').textContent = 'No capture';
-      document.getElementById('ft-jitter').textContent = 'No samples';
-      const ind = document.getElementById('ft-hex-copy-indicator');
-      if (ind) ind.classList.remove('visible');
-      if (hexCopyTimeout) {
-        clearTimeout(hexCopyTimeout);
-        hexCopyTimeout = null;
-      }
-      window.chrome.webview.postMessage({ action: 'clearHistory' });
+      cv.toBlob(blob => blob && download(`jitterentropy-${b.dataset.save.slice(3)}.png`, 'image/png', blob), 'image/png');
+    }));
+    $('btn-copy-hex').addEventListener('click', async () => { if (state.sample) { await copyText(state.sample.hex); flash('Hex copied'); } });
+    $('btn-copy-raw').addEventListener('click', async () => { if (state.libStatus) { await copyText(JSON.stringify(state.libStatus, null, 2)); flash('Status report copied'); } });
+
+    /* ---------------- keyboard ---------------- */
+    document.addEventListener('keydown', e => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'Escape') { if (!menu.hidden) return; stop(); return; }
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable) return;
+      const k = e.key.toLowerCase();
+      if (k === 'g') generate();
+      else if (k === 'b') benchmark();
+      else if (k === ' ' && e.target === document.body) { e.preventDefault(); togglePause(); }
+      else if (k >= '1' && k <= '4') setView(tabs[+k - 1].dataset.view);
     });
 
-    document.getElementById('ft-hex-container').addEventListener('click', async () => {
-      if (!latestFullHex || lastActionFailed) return;
-      try { await navigator.clipboard.writeText(latestFullHex); }
-      catch { const area = document.createElement('textarea'); area.value = latestFullHex; document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove(); }
-      const ind = document.getElementById('ft-hex-copy-indicator');
-      if (ind) {
-        ind.classList.add('visible');
-        if (hexCopyTimeout) clearTimeout(hexCopyTimeout);
-        hexCopyTimeout = setTimeout(() => {
-          ind.classList.remove('visible');
-          hexCopyTimeout = null;
-        }, 1500);
-      }
-    });
-
-    document.querySelectorAll('.metric:not([title])').forEach(metric => {
-      metric.title = 'Measured or derived diagnostic. Refer to the metric label for units; values originate from the current telemetry snapshot.';
-    });
+    /* ---------------- start ---------------- */
+    buildHeatmap();
+    updateHealthRail({});
+    /* Chart boxes can change size without the window changing (a row grows to fit its neighbour). */
+    const resizer = new ResizeObserver(() => { sizeNoise(); requestRender(true); });
+    document.querySelectorAll('.plot, .noise-wrap, #pipe-svg').forEach(el => resizer.observe(el));
+    if (host) {
+      host.addEventListener('message', e => onTelemetry(e.data));
+    } else {
+      setState($('lamp'), 'fail');
+      setText('job-text', 'Not connected. Open this page through jitterentropy_gui.exe.');
+    }
+    requestRender(true);
+  })();
   </script>
 </body>
 </html>
