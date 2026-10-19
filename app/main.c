@@ -3,6 +3,7 @@
 #include "health_monitor.h"
 #include "rng_wrapper.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>
@@ -68,6 +69,10 @@ static int parse_size(const char *text, size_t *value)
 	char *endptr;
 
 	if (!text || !value)
+		return -1;
+	/* strtoull() skips whitespace and accepts a sign, silently wrapping "-1"
+	 * to ULLONG_MAX; a size must be plain digits. */
+	if (!isdigit((unsigned char)text[0]))
 		return -1;
 
 	errno = 0;

@@ -137,9 +137,11 @@ typedef struct entropy_apt_result {
  * SP 800-90B section 4.4.2 Adaptive Proportion Test, generic form: in each
  * non-overlapping window, counts how often the window's first value
  * reoccurs, and fails a window when that count is implausibly high. The
- * per-window cutoff is a normal approximation to the exact binomial
- * quantile (continuity-corrected); expect it to be within a count or two
- * of a table computed by exact inversion.
+ * per-window cutoff is the exact binomial quantile,
+ * C = 1 + CRITBINOM(W, 2^-H, 1 - alpha), so it matches SP 800-90B Table 2
+ * and the vendor library's precomputed cutoffs. (A normal approximation
+ * used previously drifted by up to three counts at higher H, which raised
+ * the false-alarm rate far above alpha.)
  */
 entropy_apt_result entropy_stats_apt(const double *samples, size_t n,
 				     unsigned int window_size, double alpha,

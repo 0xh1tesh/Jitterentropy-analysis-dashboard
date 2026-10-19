@@ -160,12 +160,21 @@ int main(void)
 
 	/* ---- APT: cross-check the cutoff against the vendor library's own table.
 	 * jitterentropy-health.c's osr=1, alpha=2^-30 cutoff (looked up from its own
-	 * precomputed table, derived by exact binomial inversion) is 325. Our normal
-	 * approximation is documented as accurate to within a count or two. ---- */
+	 * precomputed table, derived by exact binomial inversion) is 325. ---- */
 	{
 		entropy_apt_result r = entropy_stats_apt(NULL, 0, 512, 1.0 / 1073741824.0 /* 2^-30 */, 1.0);
 		CHECK(r.window_size == 512);
-		CHECK(r.cutoff >= 322 && r.cutoff <= 328);
+		CHECK(r.cutoff == 325);
+
+		/* SP 800-90B Table 2 (W = 512, alpha = 2^-20), including high H where
+		 * a normal approximation is several counts too low. */
+		CHECK(entropy_stats_apt(NULL, 0, 512, 1.0 / 1048576.0, 0.5).cutoff == 410);
+		CHECK(entropy_stats_apt(NULL, 0, 512, 1.0 / 1048576.0, 1.0).cutoff == 311);
+		CHECK(entropy_stats_apt(NULL, 0, 512, 1.0 / 1048576.0, 2.0).cutoff == 177);
+		CHECK(entropy_stats_apt(NULL, 0, 512, 1.0 / 1048576.0, 4.0).cutoff == 62);
+		CHECK(entropy_stats_apt(NULL, 0, 512, 1.0 / 1048576.0, 8.0).cutoff == 13);
+		/* The dashboard's own live configuration (main_gui.cpp). */
+		CHECK(entropy_stats_apt(NULL, 0, 128, 1.0 / 1048576.0, 1.0).cutoff == 92);
 
 		/* A window that repeats its first value throughout must fail. */
 		double stuck_window[512];

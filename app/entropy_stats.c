@@ -194,52 +194,35 @@ void entropy_stats_report(const unsigned char *data, size_t len,
 }
 
 /*
- * Peter Acklam's rational approximation to the inverse standard normal CDF
- * (relative error <= 1.15e-9). Used only to turn an alpha into a z-score for
- * the APT cutoff below; not part of the public API.
+ * SP 800-90B CRITBINOM(n, p, 1 - alpha): the smallest k with
+ * P(Binomial(n, p) <= k) >= 1 - alpha, i.e. P(X >= k + 1) <= alpha.
+ * Exact inversion: the upper tail is summed from k = n downwards in log
+ * space, so tiny alphas (2^-30 and below) and large windows neither
+ * underflow nor lose precision. Not part of the public API.
  */
-static double inv_norm_cdf(double p)
+static unsigned int crit_binom(unsigned int n, double p, double alpha)
 {
-	static const double a[6] = {
-		-3.969683028665376e+01, 2.209460984245205e+02,
-		-2.759285104469687e+02, 1.383577518672690e+02,
-		-3.066479806614716e+01, 2.506628277459239e+00
-	};
-	static const double b[5] = {
-		-5.447609879822406e+01, 1.615858368580409e+02,
-		-1.556989798598866e+02, 6.680131188771972e+01,
-		-1.328068155288572e+01
-	};
-	static const double c[6] = {
-		-7.784894002430293e-03, -3.223964580411365e-01,
-		-2.400758277161838e+00, -2.549732539343734e+00,
-		4.374664141464968e+00, 2.938163982698783e+00
-	};
-	static const double d[4] = {
-		7.784695709041462e-03, 3.224671290700398e-01,
-		2.445134137142996e+00, 3.754408661907416e+00
-	};
-	const double p_low = 0.02425, p_high = 1.0 - p_low;
-	double q, r;
+	double log_p, log_q, log_n_fact, tail = 0.0;
+	unsigned int k;
 
 	if (p <= 0.0)
-		return -HUGE_VAL;
+		return 0;
 	if (p >= 1.0)
-		return HUGE_VAL;
+		return n;
 
-	if (p < p_low) {
-		q = sqrt(-2.0 * log(p));
-		return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-		       ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
-	} else if (p <= p_high) {
-		q = p - 0.5;
-		r = q * q;
-		return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
-		       (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1.0);
-	} else {
-		q = sqrt(-2.0 * log(1.0 - p));
-		return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
-		       ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1.0);
+	log_p = log(p);
+	log_q = log1p(-p);
+	log_n_fact = lgamma((double)n + 1.0);
+
+	/* Invariant at the top of each pass: tail = P(X >= k + 1) <= alpha. */
+	for (k = n;; k--) {
+		double log_pmf = log_n_fact - lgamma((double)k + 1.0) -
+				 lgamma((double)(n - k) + 1.0) +
+				 (double)k * log_p + (double)(n - k) * log_q;
+
+		tail += exp(log_pmf); /* tail = P(X >= k) */
+		if (tail > alpha || k == 0)
+			return k;
 	}
 }
 
@@ -292,7 +275,6 @@ entropy_apt_result entropy_stats_apt(const double *samples, size_t n,
 				     double h_bits)
 {
 	entropy_apt_result r = {0};
-	double p, trials, mean, sd, z, cutoff_d;
 	size_t start;
 
 	if (!window_size)
@@ -302,19 +284,11 @@ entropy_apt_result entropy_stats_apt(const double *samples, size_t n,
 	r.window_size = window_size;
 
 	/*
-	 * Normal approximation to the exact SP 800-90B binomial quantile (see
-	 * entropy_stats.h): p is the worst-case probability that any two
-	 * samples collide, given h_bits of min-entropy per sample.
+	 * SP 800-90B section 4.4.2: C = 1 + CRITBINOM(W, 2^-H, 1 - alpha).
+	 * A window fails when its first value occurs C or more times in it
+	 * (the count includes the first sample itself).
 	 */
-	p = pow(2.0, -h_bits);
-	trials = (double)(window_size - 1);
-	mean = trials * p;
-	sd = sqrt(trials * p * (1.0 - p));
-	z = inv_norm_cdf(1.0 - alpha);
-	cutoff_d = mean + z * sd + 0.5; /* continuity correction */
-	if (cutoff_d < 1.0)
-		cutoff_d = 1.0;
-	r.cutoff = (unsigned int)ceil(cutoff_d);
+	r.cutoff = 1 + crit_binom(window_size, pow(2.0, -h_bits), alpha);
 
 	if (!samples || n < window_size) {
 		r.passed = true;
