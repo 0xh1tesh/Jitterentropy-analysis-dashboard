@@ -1,0 +1,46 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same MinGW-w64 toolchain the README builds with.
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-make
+
+      - name: Put the toolchain on PATH
+        shell: pwsh
+        run: Add-Content $env:GITHUB_PATH "${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin"
+
+      - name: Build the vendored library
+        shell: pwsh
+        run: |
+          cmake -S jitterentropy-library -B jitterentropy-library/build -G "MinGW Makefiles"
+          cmake --build jitterentropy-library/build --target jitterentropy --parallel 4
+
+      - name: Build the CLI, dashboard and unit tests
+        shell: pwsh
+        run: |
+          cmake -S app -B runtime -G "MinGW Makefiles"
+          cmake --build runtime --parallel 4
+
+      - name: Unit tests
+        shell: pwsh
+        run: ctest --test-dir runtime --output-on-failure
+
+      - name: CLI smoke test
+        shell: pwsh
+        run: .\runtime\jitterentropy_app.exe --bytes 64 --stats --status
